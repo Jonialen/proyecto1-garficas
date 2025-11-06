@@ -4,7 +4,7 @@ pub struct Player {
     pub position: Vec2,
     pub direction: Vec2,
     pub fov: f32,
-    pub hasMove: bool,
+    pub has_moved: bool,
 }
 
 impl Player {
@@ -13,7 +13,7 @@ impl Player {
             position: Vec2::new(x, y),
             direction: Vec2::new(1.0, 0.0),
             fov: std::f32::consts::PI / 3.0,
-            hasMove: false,
+            has_moved: false,
         }
     }
 
@@ -30,6 +30,7 @@ impl Player {
 
     pub fn rotate(&mut self, angle: f32) {
         self.direction = self.direction.rotate(angle);
+        self.has_moved = true;
     }
 
     pub fn move_forward(&mut self, distance: f32, map: &[Vec<u8>]) {
@@ -37,16 +38,15 @@ impl Player {
             self.position.x + self.direction.x * distance,
             self.position.y + self.direction.y * distance,
         );
-        hasMove = true;
-
+        
         if self.is_valid_position(new_pos, map) {
             self.position = new_pos;
+            self.has_moved = true;
         }
     }
 
     pub fn move_backward(&mut self, distance: f32, map: &[Vec<u8>]) {
         self.move_forward(-distance, map);
-        hasMove = true;
     }
 
     pub fn strafe(&mut self, distance: f32, map: &[Vec<u8>]) {
@@ -58,8 +58,8 @@ impl Player {
 
         if self.is_valid_position(new_pos, map) {
             self.position = new_pos;
+            self.has_moved = true;
         }
-        hasMove = true;
     }
 
     fn is_valid_position(&self, pos: Vec2, map: &[Vec<u8>]) -> bool {
@@ -87,9 +87,5 @@ impl Player {
 
     pub fn get_grid_position(&self) -> (usize, usize) {
         (self.position.x as usize, self.position.y as usize)
-    }
-
-    pub fn get_direction_symbol(&self) -> char {
-        '█'
     }
 }

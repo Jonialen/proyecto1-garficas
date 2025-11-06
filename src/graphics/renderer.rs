@@ -18,7 +18,6 @@ pub struct GameRenderer {
     offset_y: u16,
     map_symbols: HashMap<u8, Pixel>,
     minimap_size: usize,
-    minimap_scale: usize,
 }
 
 impl GameRenderer {
@@ -52,14 +51,13 @@ impl GameRenderer {
         let offset_y = ((rows as isize - map_pixel_height as isize) / 2).max(0) as u16;
 
         let mut map_symbols = HashMap::new();
-        map_symbols.insert(0, Pixel::new(Color::Black, '█'));
+        map_symbols.insert(0, Pixel::new(Color::Black, '░'));
         map_symbols.insert(1, Pixel::new(Color::White, '█'));
         map_symbols.insert(2, Pixel::new(Color::Green, '█'));
         map_symbols.insert(3, Pixel::new(Color::Red, '█'));
         map_symbols.insert(4, Pixel::new(Color::Blue, '█'));
 
-        let minimap_size = 12.min(terminal_cols / 6).min(terminal_rows / 6).max(8);
-        let minimap_scale = 1;
+        let minimap_size = 14.min(terminal_cols / 6).min(terminal_rows / 6).max(10);
 
         Self {
             cell_width,
@@ -68,7 +66,6 @@ impl GameRenderer {
             offset_y,
             map_symbols,
             minimap_size,
-            minimap_scale,
         }
     }
 
@@ -80,65 +77,38 @@ impl GameRenderer {
         let center_x = cols / 2;
         let start_y = rows / 4;
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(10), start_y))
-            .unwrap();
-        print!("{}", "🎮 RAYTRACER MAZE 🎮".with(Color::Cyan));
+        stdout.execute(MoveTo(center_x.saturating_sub(12), start_y)).unwrap();
+        print!("{}", "🎮 RAYTRACER MAZE 🎮".with(Color::Cyan).bold());
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(8), start_y + 2))
-            .unwrap();
-        print!("{}", "═══════════════════".with(Color::White));
+        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 2)).unwrap();
+        print!("{}", "═══════════════════════".with(Color::DarkCyan));
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(12), start_y + 4))
-            .unwrap();
-        print!("{}", "⌨️  CONTROLES:".with(Color::Yellow));
+        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 4)).unwrap();
+        print!("{}", "⌨️  CONTROLES:".with(Color::Yellow).bold());
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(15), start_y + 6))
-            .unwrap();
-        print!("{}", "WASD o ↑↓←→  - Mover jugador".with(Color::White));
+        let controls = [
+            "WASD / ↑↓←→  - Mover jugador",
+            "Q / E        - Rotar cámara",
+            "C            - Cambiar vista",
+            "X / ESC      - Salir",
+        ];
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(15), start_y + 7))
-            .unwrap();
-        print!("{}", "Q / E        - Rotar cámara".with(Color::White));
+        for (i, control) in controls.iter().enumerate() {
+            stdout.execute(MoveTo(center_x.saturating_sub(15), start_y + 6 + i as u16)).unwrap();
+            print!("{}", control.with(Color::White));
+        }
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(15), start_y + 8))
-            .unwrap();
-        print!("{}", "C            - Cambiar vista".with(Color::White));
+        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 11)).unwrap();
+        print!("{}", "🎯 OBJETIVO:".with(Color::Yellow).bold());
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(15), start_y + 9))
-            .unwrap();
-        print!("{}", "X / ESC      - Salir".with(Color::White));
+        stdout.execute(MoveTo(center_x.saturating_sub(20), start_y + 12)).unwrap();
+        print!("{}", "Llega desde el inicio 🟩 hasta la meta 🟥".with(Color::White));
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(12), start_y + 11))
-            .unwrap();
-        print!("{}", "🎯 OBJETIVO:".with(Color::Yellow));
+        stdout.execute(MoveTo(center_x.saturating_sub(15), start_y + 15)).unwrap();
+        print!("{}", "Presiona ENTER para jugar".with(Color::Green).bold());
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(20), start_y + 12))
-            .unwrap();
-        print!(
-            "{} {} {}",
-            "Llega desde el inicio {} hasta la meta {}".with(Color::White),
-            "🟩".with(Color::Green),
-            "🟥".with(Color::Red)
-        );
-
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(12), start_y + 15))
-            .unwrap();
-        print!("{}", "Presiona ENTER para jugar".with(Color::Green));
-
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(8), start_y + 16))
-            .unwrap();
-        print!("{}", "═══════════════════".with(Color::White));
+        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 16)).unwrap();
+        print!("{}", "═══════════════════════".with(Color::DarkCyan));
 
         stdout.flush().unwrap();
     }
@@ -151,29 +121,14 @@ impl GameRenderer {
         let center_x = cols / 2;
         let center_y = rows / 2;
 
-        stdout
-            .execute(MoveTo(
-                center_x.saturating_sub(8),
-                center_y.saturating_sub(3),
-            ))
-            .unwrap();
-        print!("{}", "🎉 ¡VICTORIA! 🎉".with(Color::Green));
+        stdout.execute(MoveTo(center_x.saturating_sub(10), center_y.saturating_sub(3))).unwrap();
+        print!("{}", "🎉 ¡VICTORIA! 🎉".with(Color::Green).bold());
 
-        stdout
-            .execute(MoveTo(
-                center_x.saturating_sub(12),
-                center_y.saturating_sub(1),
-            ))
-            .unwrap();
+        stdout.execute(MoveTo(center_x.saturating_sub(12), center_y.saturating_sub(1))).unwrap();
         print!("{}", "¡Has llegado a la meta!".with(Color::Yellow));
 
-        stdout
-            .execute(MoveTo(center_x.saturating_sub(15), center_y + 1))
-            .unwrap();
-        print!(
-            "{}",
-            "Presiona cualquier tecla para salir".with(Color::White)
-        );
+        stdout.execute(MoveTo(center_x.saturating_sub(18), center_y + 1)).unwrap();
+        print!("{}", "Presiona cualquier tecla para salir".with(Color::White));
 
         stdout.flush().unwrap();
     }
@@ -221,7 +176,7 @@ impl GameRenderer {
 
         // Renderizar jugador
         let (grid_x, grid_y) = player.get_grid_position();
-        let player_pixel = Pixel::new(Color::Cyan, '█');
+        let player_pixel = Pixel::new(Color::Cyan, '●');
 
         for sub_row in 0..self.cell_height {
             for sub_col in 0..self.cell_width {
@@ -240,13 +195,23 @@ impl GameRenderer {
         player: &Player,
         map: &[Vec<u8>],
     ) {
-        // Cielo y suelo
+        // Cielo y suelo con gradiente sutil
         for y in 0..framebuffer.height {
             for x in 0..framebuffer.width {
                 if y < framebuffer.height / 2 {
-                    framebuffer.set_pixel(x, y, Pixel::new(Color::DarkBlue, '█'));
+                    let color = if y < framebuffer.height / 4 {
+                        Color::DarkBlue
+                    } else {
+                        Color::Blue
+                    };
+                    framebuffer.set_pixel(x, y, Pixel::new(color, '░'));
                 } else {
-                    framebuffer.set_pixel(x, y, Pixel::new(Color::DarkGreen, '█'));
+                    let color = if y > framebuffer.height * 3 / 4 {
+                        Color::Black
+                    } else {
+                        Color::DarkGreen
+                    };
+                    framebuffer.set_pixel(x, y, Pixel::new(color, '░'));
                 }
             }
         }
@@ -259,7 +224,7 @@ impl GameRenderer {
             let ray_angle = start_angle + i as f32 * ray_angle_step;
             let ray_dir = player.direction.rotate(ray_angle);
 
-            let distance = self.cast_ray(player.position, ray_dir, map);
+            let (distance, hit_type) = self.cast_ray_with_type(player.position, ray_dir, map);
             let corrected_distance = distance * ray_angle.cos();
 
             let line_height = if corrected_distance > 0.0 {
@@ -279,8 +244,16 @@ impl GameRenderer {
                 framebuffer.height - 1
             };
 
+            // Colores diferentes según tipo de pared
+            let base_color = match hit_type {
+                1 => Color::White,
+                4 => Color::Blue,
+                _ => Color::Grey,
+            };
+
+            // Degradado por distancia
             let color = if corrected_distance < 2.0 {
-                Color::White
+                base_color
             } else if corrected_distance < 4.0 {
                 Color::Grey
             } else if corrected_distance < 8.0 {
@@ -289,8 +262,10 @@ impl GameRenderer {
                 Color::Black
             };
 
+            let symbol = if corrected_distance < 3.0 { '█' } else { '▓' };
+
             for y in draw_start..=draw_end.min(framebuffer.height - 1) {
-                framebuffer.set_pixel(i, y, Pixel::new(color, '█'));
+                framebuffer.set_pixel(i, y, Pixel::new(color, symbol));
             }
         }
 
@@ -317,12 +292,8 @@ impl GameRenderer {
                 let y = minimap_y + j;
 
                 if x < framebuffer.width && y < framebuffer.height {
-                    if i == 0
-                        || i == total_minimap_width - 1
-                        || j == 0
-                        || j == total_minimap_height - 1
-                    {
-                        framebuffer.set_pixel(x, y, Pixel::new(Color::Grey, '█'));
+                    if i == 0 || i == total_minimap_width - 1 || j == 0 || j == total_minimap_height - 1 {
+                        framebuffer.set_pixel(x, y, Pixel::new(Color::Yellow, '█'));
                     }
                 }
             }
@@ -355,29 +326,29 @@ impl GameRenderer {
                 }
 
                 let pixel = if world_x == player_map_x && world_y == player_map_y {
-                    Pixel::new(Color::Cyan, '█')
+                    Pixel::new(Color::Cyan, '●')
                 } else if world_y < map.len() && world_x < map[0].len() {
                     match map[world_y][world_x] {
-                        0 => Pixel::new(Color::DarkGrey, '█'),
+                        0 => Pixel::new(Color::Black, '·'),
                         1 => Pixel::new(Color::White, '█'),
                         2 => Pixel::new(Color::Green, '█'),
                         3 => Pixel::new(Color::Red, '█'),
                         4 => Pixel::new(Color::Blue, '█'),
-                        _ => Pixel::new(Color::Black, '█'),
+                        _ => Pixel::new(Color::Black, '?'),
                     }
                 } else {
-                    Pixel::new(Color::Black, '█')
+                    Pixel::new(Color::Black, ' ')
                 };
 
                 framebuffer.set_pixel(screen_x, screen_y, pixel);
             }
         }
 
-        // Indicador de dirección del jugador
+        // Indicador de dirección
         let center_x = minimap_x + 1 + half_size;
         let center_y = minimap_y + 1 + half_size;
-        let dir_x = (center_x as f32 + player.direction.x * 2.0).round() as usize;
-        let dir_y = (center_y as f32 + player.direction.y * 2.0).round() as usize;
+        let dir_x = (center_x as f32 + player.direction.x * 2.5).round() as usize;
+        let dir_y = (center_y as f32 + player.direction.y * 2.5).round() as usize;
 
         if dir_x >= minimap_x + 1
             && dir_x < minimap_x + total_minimap_width - 1
@@ -386,7 +357,7 @@ impl GameRenderer {
             && dir_x < framebuffer.width
             && dir_y < framebuffer.height
         {
-            framebuffer.set_pixel(dir_x, dir_y, Pixel::new(Color::Yellow, '█'));
+            framebuffer.set_pixel(dir_x, dir_y, Pixel::new(Color::Red, '▲'));
         }
     }
 
@@ -394,11 +365,11 @@ impl GameRenderer {
         let center_x = (player.position.x * self.cell_width as f32) as usize;
         let center_y = (player.position.y * self.cell_height as f32) as usize;
 
-        for i in 0..5 {
-            let angle_offset = (i as f32 - 2.0) * (player.fov / 4.0);
+        for i in 0..7 {
+            let angle_offset = (i as f32 - 3.0) * (player.fov / 6.0);
             let ray_dir = player.direction.rotate(angle_offset);
 
-            let distance = self.cast_ray(player.position, ray_dir, map);
+            let (distance, _) = self.cast_ray_with_type(player.position, ray_dir, map);
             let end_x = player.position.x + ray_dir.x * distance;
             let end_y = player.position.y + ray_dir.y * distance;
 
@@ -413,12 +384,12 @@ impl GameRenderer {
                 center_y,
                 safe_end_x,
                 safe_end_y,
-                Pixel::new(Color::Yellow, '█'),
+                Pixel::new(Color::Yellow, '·'),
             );
         }
     }
 
-    fn cast_ray(&self, start: Vec2, direction: Vec2, map: &[Vec<u8>]) -> f32 {
+    fn cast_ray_with_type(&self, start: Vec2, direction: Vec2, map: &[Vec<u8>]) -> (f32, u8) {
         let mut map_x = start.x as i32;
         let mut map_y = start.y as i32;
 
@@ -439,6 +410,7 @@ impl GameRenderer {
 
         let mut hit = false;
         let mut side = 0;
+        let mut hit_type = 0u8;
 
         while !hit {
             if side_dist_x < side_dist_y {
@@ -451,13 +423,15 @@ impl GameRenderer {
                 side = 1;
             }
 
-            if map_x < 0
-                || map_y < 0
-                || map_y as usize >= map.len()
-                || map_x as usize >= map[0].len()
-                || map[map_y as usize][map_x as usize] == 1
-            {
+            if map_x < 0 || map_y < 0 || map_y as usize >= map.len() || map_x as usize >= map[0].len() {
                 hit = true;
+                hit_type = 1;
+            } else {
+                let cell = map[map_y as usize][map_x as usize];
+                if cell == 1 || cell == 4 {
+                    hit = true;
+                    hit_type = cell;
+                }
             }
         }
 
@@ -467,22 +441,18 @@ impl GameRenderer {
             (map_y as f32 - start.y + (1 - step_y) as f32 / 2.0) / direction.y
         };
 
-        perp_wall_dist.abs()
+        (perp_wall_dist.abs(), hit_type)
     }
 
     pub fn display_framebuffer(&self, framebuffer: &Framebuffer) {
         let mut stdout = stdout();
-        stdout.execute(Clear(ClearType::All)).unwrap();
-
+        
+        // NO limpiar toda la pantalla, solo mover el cursor
         let use_offset = framebuffer.width < size().unwrap().0 as usize;
 
         for (y, row) in framebuffer.pixels.iter().enumerate() {
             let x_pos = if use_offset { self.offset_x } else { 0 };
-            let y_pos = if use_offset {
-                self.offset_y + y as u16
-            } else {
-                y as u16
-            };
+            let y_pos = if use_offset { self.offset_y + y as u16 } else { y as u16 };
 
             stdout.execute(MoveTo(x_pos, y_pos)).unwrap();
 
@@ -491,6 +461,20 @@ impl GameRenderer {
                 print!("{}", styled);
             }
         }
+        stdout.flush().unwrap();
+    }
+
+    pub fn display_ui(&self, fps: f32, px: f32, py: f32, grid_x: usize, grid_y: usize, mode: CameraMode) {
+        let mut stdout = stdout();
+        let (_, rows) = size().unwrap();
+        
+        // Mostrar controles en la parte inferior
+        stdout.execute(MoveTo(0, rows.saturating_sub(3))).unwrap();
+        print!("{}", format!("[WASD:move | QE:rotate | C:camera | X:quit] FPS: {:.0}", fps).with(Color::White));
+        
+        stdout.execute(MoveTo(0, rows.saturating_sub(2))).unwrap();
+        print!("{}", format!("Pos: ({:.2}, {:.2}) Grid: ({}, {}) Cam: {:?}", px, py, grid_x, grid_y, mode).with(Color::DarkGrey));
+        
         stdout.flush().unwrap();
     }
 

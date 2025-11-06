@@ -1,4 +1,4 @@
-#[derive(PartialEq, Debug)]
+#[derive(Clone, Copy,PartialEq, Debug)]
 pub enum CameraMode {
     TopDown,
     FirstPerson,
