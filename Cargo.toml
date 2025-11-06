@@ -5,3 +5,11 @@ edition = "2024"
 
 [dependencies]
 crossterm = "0.29.0"
+
+[[bin]]
+name = "raytracer-maze"
+path = "src/main.rs"
+
+[lib]
+name = "raytracer_maze"
+path = "src/lib.rs"
