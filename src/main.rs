@@ -6,10 +6,9 @@ use crossterm::{
 };
 use std::time::{Duration, Instant};
 
-use crossterm::style::Color;
 use raytracer_maze::{
-    Camera, CameraMode, Entity, EntityType, Framebuffer, GameRenderer, 
-    GameState, Pixel, Player, Level,
+    Camera, CameraMode, Framebuffer, GameRenderer, 
+    GameState, Player, Level,
 };
 
 struct FpsCounter {
@@ -241,7 +240,6 @@ fn main() {
                                 &level_ref.map,
                                 &player,
                                 &[],
-                                collected_items,
                             );
                             renderer.display_framebuffer(&fb_topdown);
                         }
@@ -250,20 +248,15 @@ fn main() {
                                 &mut fb_firstperson,
                                 &player,
                                 &level_ref.map,
-                                collected_items,
                             );
                             renderer.display_framebuffer(&fb_firstperson);
                         }
                     }
 
-                    let (px, py) = player.get_grid_position();
                     renderer.display_ui(
                         fps_counter.get_fps(),
                         player.position.x,
                         player.position.y,
-                        px,
-                        py,
-                        camera.mode,
                         collected_items,
                         level_ref.required_items,
                         current_level + 1,
