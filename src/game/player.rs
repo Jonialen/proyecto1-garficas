@@ -46,7 +46,15 @@ impl Player {
     }
 
     pub fn move_backward(&mut self, distance: f32, map: &[Vec<u8>]) {
-        self.move_forward(-distance, map);
+        let new_pos = Vec2::new(
+            self.position.x - self.direction.x * distance,
+            self.position.y - self.direction.y * distance,
+        );
+        
+        if self.is_valid_position(new_pos, map) {
+            self.position = new_pos;
+            self.has_moved = true;
+        }
     }
 
     pub fn strafe(&mut self, distance: f32, map: &[Vec<u8>]) {
