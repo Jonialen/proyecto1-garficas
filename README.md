@@ -54,3 +54,6 @@ El proyecto está organizado en los siguientes módulos principales dentro de `s
   - `pixel.rs`: Representa un único carácter con color en la terminal.
 - **`math/`**: Proporciona herramientas matemáticas básicas.
   - `mod.rs`: Incluye una estructura `Vec2` para operaciones vectoriales en 2D.
+
+
+https://youtu.be/xKysX23nUzs
