@@ -55,5 +55,5 @@ El proyecto está organizado en los siguientes módulos principales dentro de `s
 - **`math/`**: Proporciona herramientas matemáticas básicas.
   - `mod.rs`: Incluye una estructura `Vec2` para operaciones vectoriales en 2D.
 
+[![Reproducir video de YouTube]([https://img.youtube.com/vi/dQw4w9WgXcQ/0.jpg)](https://www.youtube.com/watch?v=dQw4w9WgXcQ](https://youtu.be/xKysX23nUzs))
 
-https://youtu.be/xKysX23nUzs
