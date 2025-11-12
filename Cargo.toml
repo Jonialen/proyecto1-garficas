@@ -1,7 +1,19 @@
 [package]
 name = "proyecto1"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
 crossterm = "0.29.0"
+
+[[bin]]
+name = "raytracer-maze"
+path = "src/main.rs"
+
+[lib]
+name = "raytracer_maze"
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
