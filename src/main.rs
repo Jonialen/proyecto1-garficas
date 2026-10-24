@@ -7,8 +7,8 @@ use crossterm::{
 use std::time::{Duration, Instant};
 
 use raytracer_maze::{
-    Camera, CameraMode, Framebuffer, GameRenderer, 
-    GameState, Player, Level,
+    Audio, Camera, CameraMode, Framebuffer, GameRenderer,
+    GameState, Player, Level, Sfx,
 };
 
 struct FpsCounter {
@@ -107,6 +107,9 @@ fn main() {
     let mut game_state = GameState::Menu;
     let mut fps_counter = FpsCounter::new();
 
+    // El audio es opcional: sin dispositivo de salida el juego sigue en silencio.
+    let mut audio = Audio::new();
+
     crossterm::terminal::enable_raw_mode().unwrap();
     let mut stdout = std::io::stdout();
     stdout.execute(Hide).unwrap();
@@ -142,6 +145,9 @@ fn main() {
                                 game_state = GameState::LevelSelect;
                             },
                             KeyCode::Char('x') | KeyCode::Esc => running = false,
+                            KeyCode::Char('m') => {
+                                if let Some(audio) = audio.as_mut() { audio.toggle_mute(); }
+                            }
                             _ => {}
                         }
                     }
@@ -206,6 +212,7 @@ fn main() {
                 if level.collect_item(px, py) {
                     collected_items += 1;
                     renderer.trigger_pickup_flash();
+                    if let Some(audio) = &audio { audio.play(Sfx::Pickup); }
                     player.has_moved = true; // Forzar re-render
                 }
 
@@ -213,6 +220,7 @@ fn main() {
                 if !level_complete && player.is_at_goal(&level.map) && collected_items >= level.required_items {
                     level_complete = true;
                     renderer.start_fade_out();
+                    if let Some(audio) = &audio { audio.play(Sfx::LevelComplete); }
                 }
                 if level_complete && renderer.fade_out_finished() {
                     level_complete = false;
@@ -285,8 +293,8 @@ fn main() {
 
                 if poll(Duration::from_millis(1)).unwrap() {
                     if let Ok(Event::Key(KeyEvent { code, .. })) = read() {
-                        // Durante el fundido de fin de nivel solo se permite salir.
-                        let code = if level_complete && !matches!(code, KeyCode::Char('x') | KeyCode::Esc) {
+                        // Durante el fundido de fin de nivel solo se permite salir o silenciar.
+                        let code = if level_complete && !matches!(code, KeyCode::Char('x') | KeyCode::Esc | KeyCode::Char('m')) {
                             KeyCode::Null
                         } else {
                             code
@@ -308,6 +316,9 @@ fn main() {
                                 player.has_moved = true;
                             }
                             KeyCode::Char('x') | KeyCode::Esc => running = false,
+                            KeyCode::Char('m') => {
+                                if let Some(audio) = audio.as_mut() { audio.toggle_mute(); }
+                            }
                             _ => {}
                         }
                     }

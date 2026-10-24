@@ -62,7 +62,7 @@ const FADE_OUT_DURATION: f32 = 0.6;
 const FLOOR_GROUT: f32 = 0.04;
 const FLOOR_GROUT_COLOR: [f32; 3] = [30.0, 38.0, 30.0];
 /// Filas de texto del menú debajo del título.
-const MENU_TEXT_ROWS: usize = 17;
+const MENU_TEXT_ROWS: usize = 18;
 /// Filas de texto de la pantalla de victoria debajo del título.
 const VICTORY_TEXT_ROWS: usize = 6;
 /// Cantidad de destellos animados en la pantalla de victoria.
@@ -423,6 +423,7 @@ impl GameRenderer {
             ("WASD / ↑↓←→", "Mover"),
             ("Q / E", "Rotar"),
             ("C", "Cambiar vista"),
+            ("M", "Silenciar"),
             ("X / ESC", "Salir"),
         ];
         for (i, (keys, action)) in controls.iter().enumerate() {
@@ -430,10 +431,10 @@ impl GameRenderer {
             let line = format!("{:<14}{:<13}", keys, action);
             draw_text_centered(&mut framebuffer, text_y + 6 + i, &line, white, 1.0);
         }
-        draw_text_centered(&mut framebuffer, text_y + 11, "Recolecta ◆ y llega a la meta ● en 3 niveles", dim, 1.0);
+        draw_text_centered(&mut framebuffer, text_y + 12, "Recolecta ◆ y llega a la meta ● en 3 niveles", dim, 1.0);
 
         let pulse = 0.55 + 0.45 * (time * 3.0).sin();
-        draw_text_centered(&mut framebuffer, text_y + 14, "▶  Presiona ENTER para jugar  ◀", [120.0, 255.0, 150.0], pulse);
+        draw_text_centered(&mut framebuffer, text_y + 15, "▶  Presiona ENTER para jugar  ◀", [120.0, 255.0, 150.0], pulse);
 
         framebuffer
     }
@@ -1060,7 +1061,7 @@ impl GameRenderer {
         let (_, rows) = size().unwrap();
         
         stdout.execute(MoveTo(0, rows.saturating_sub(3))).unwrap();
-        print!("{}", format!("[WASD:move | QE:rotate | C:camera | X:quit] FPS: {:.0}", fps).with(Color::White));
+        print!("{}", format!("[WASD:move | QE:rotate | C:camera | M:mute | X:quit] FPS: {:.0}", fps).with(Color::White));
         
         stdout.execute(MoveTo(0, rows.saturating_sub(2))).unwrap();
         print!("{}", format!("Nivel {}/{}: {} | ", level, total_levels, level_name).with(Color::Yellow));
