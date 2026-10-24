@@ -63,6 +63,12 @@ const FLOOR_GROUT: f32 = 0.04;
 const FLOOR_GROUT_COLOR: [f32; 3] = [30.0, 38.0, 30.0];
 /// Filas de texto del menú debajo del título.
 const MENU_TEXT_ROWS: usize = 17;
+/// Filas de texto de la pantalla de victoria debajo del título.
+const VICTORY_TEXT_ROWS: usize = 6;
+/// Cantidad de destellos animados en la pantalla de victoria.
+const SPARKLE_COUNT: usize = 70;
+/// Brillo máximo de un canal del fondo para dibujar un destello encima.
+const SPARKLE_MAX_BACKGROUND: f32 = 60.0;
 /// Lado de cada glifo de la fuente de bloques.
 const FONT_SIZE: usize = 5;
 
@@ -153,6 +159,9 @@ fn font_glyph(ch: char) -> [&'static str; FONT_SIZE] {
         'N' => ["#...#", "##..#", "#.#.#", "#..##", "#...#"],
         'T' => ["#####", "..#..", "..#..", "..#..", "..#.."],
         'O' => [".###.", "#...#", "#...#", "#...#", ".###."],
+        'V' => ["#...#", "#...#", "#...#", ".#.#.", "..#.."],
+        'S' => [".####", "#....", ".###.", "....#", "####."],
+        'C' => [".####", "#....", "#....", "#....", ".####"],
         _ => [".....", ".....", ".....", ".....", "....."],
     }
 }
@@ -319,6 +328,13 @@ impl GameRenderer {
         }
     }
 
+    /// Limpia toda la terminal, para no dejar restos de la pantalla anterior.
+    pub fn clear_screen(&self) {
+        let mut stdout = stdout();
+        stdout.execute(ResetColor).unwrap();
+        stdout.execute(Clear(ClearType::All)).unwrap();
+    }
+
     /// Muestra el menú principal del juego, con un título animado en letras de bloque.
     /// Se dibuja en un framebuffer de pantalla completa (sin limpiar la terminal) para evitar parpadeos.
     pub fn show_menu(&self) {
@@ -327,8 +343,10 @@ impl GameRenderer {
         self.display_framebuffer(&framebuffer);
     }
 
-    /// Dibuja el menú principal en un framebuffer del tamaño indicado.
-    pub fn render_menu(&self, width: usize, height: usize) -> Framebuffer {
+    /// Dibuja el fondo con viñeta y un título animado en letras de bloque, centrando verticalmente
+    /// el título junto con `text_rows` filas de texto. Devuelve el framebuffer y la fila donde
+    /// empieza el texto.
+    fn render_title_screen(&self, width: usize, height: usize, title: &str, text_rows: usize) -> (Framebuffer, usize) {
         let hi_height = height * 2;
         let time = self.start_time.elapsed().as_secs_f32();
 
@@ -345,14 +363,13 @@ impl GameRenderer {
         }
 
         // Título en letras de bloque; cada punto de la fuente ocupa `scale`×`scale` píxeles.
-        let title = "LABERINTO";
         let glyph_cols = title.len() * (FONT_SIZE + 1) - 1;
         let scale = if width >= glyph_cols * 2 + 4 { 2 } else { 1 };
         let title_w = glyph_cols * scale;
         let title_h = FONT_SIZE * scale;
         let title_x = width.saturating_sub(title_w) / 2;
-        // Centra verticalmente el bloque completo: título + MENU_TEXT_ROWS filas de texto.
-        let content_rows = title_h / 2 + MENU_TEXT_ROWS;
+        // Centra verticalmente el bloque completo: título + filas de texto.
+        let content_rows = title_h / 2 + text_rows;
         let title_y = (height.saturating_sub(content_rows) / 2 * 2).max(2);
 
         for (i, ch) in title.chars().enumerate() {
@@ -389,7 +406,13 @@ impl GameRenderer {
             }
         }
 
-        let text_y = (title_y + title_h) / 2 + 2;
+        (framebuffer, (title_y + title_h) / 2 + 2)
+    }
+
+    /// Dibuja el menú principal en un framebuffer del tamaño indicado.
+    pub fn render_menu(&self, width: usize, height: usize) -> Framebuffer {
+        let time = self.start_time.elapsed().as_secs_f32();
+        let (mut framebuffer, text_y) = self.render_title_screen(width, height, "LABERINTO", MENU_TEXT_ROWS);
         let white = [225.0, 225.0, 235.0];
         let dim = [150.0, 150.0, 170.0];
         let gold = [255.0, 200.0, 70.0];
@@ -417,23 +440,42 @@ impl GameRenderer {
 
     /// Muestra la pantalla de victoria cuando se completan todos los niveles.
     pub fn show_victory(&self) {
-        let mut stdout = stdout();
-        stdout.execute(Clear(ClearType::All)).unwrap();
-
         let (cols, rows) = size().unwrap();
-        let center_x = cols / 2;
-        let center_y = rows / 2;
+        let framebuffer = self.render_victory(cols as usize, rows as usize);
+        self.display_framebuffer(&framebuffer);
+    }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(15), center_y.saturating_sub(3))).unwrap();
-        print!("{}", "🎉 ¡FELICIDADES! 🎉".with(Color::Green).bold());
+    /// Dibuja la pantalla de victoria, con destellos dorados que caen.
+    pub fn render_victory(&self, width: usize, height: usize) -> Framebuffer {
+        let time = self.start_time.elapsed().as_secs_f32();
+        let (mut framebuffer, text_y) = self.render_title_screen(width, height, "VICTORIA", VICTORY_TEXT_ROWS);
 
-        stdout.execute(MoveTo(center_x.saturating_sub(18), center_y.saturating_sub(1))).unwrap();
-        print!("{}", "¡Has completado todos los niveles!".with(Color::Yellow));
+        // Destellos: posición pseudoaleatoria estable por índice, caen y titilan con el tiempo.
+        for i in 0..SPARKLE_COUNT as i32 {
+            let x = (hash2(i, 1) * width as f32) as usize;
+            let speed = 2.0 + 4.0 * hash2(i, 2);
+            let y = ((hash2(i, 3) * height as f32 + time * speed) % height as f32) as usize;
+            let twinkle = 0.5 + 0.5 * (time * 5.0 + hash2(i, 4) * 6.28).sin();
+            let symbol = if hash2(i, 5) < 0.5 { '✦' } else { '·' };
+            if x >= width || y >= height || framebuffer.pixels[y][x].symbol != '▀' { continue; }
+            let (top, bg) = match (framebuffer.pixels[y][x].color, framebuffer.pixels[y][x].bg) {
+                (Color::Rgb { r, g, b }, Color::Rgb { r: br, g: bg, b: bb }) => {
+                    ([r as f32, g as f32, b as f32], [br as f32, bg as f32, bb as f32])
+                }
+                _ => continue,
+            };
+            // Solo sobre el fondo oscuro: así nunca tapan las letras del título.
+            if top.iter().chain(bg.iter()).any(|&c| c > SPARKLE_MAX_BACKGROUND) { continue; }
+            let fg = lerp_color(bg, FLASH_COLOR, twinkle);
+            framebuffer.set_pixel(x, y, Pixel::with_bg(to_rgb(fg), to_rgb(bg), symbol));
+        }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(18), center_y + 1)).unwrap();
-        print!("{}", "Presiona cualquier tecla para salir".with(Color::White));
-
-        stdout.flush().unwrap();
+        let gold = [255.0, 200.0, 70.0];
+        draw_text_centered(&mut framebuffer, text_y, "◆ ─────────────────────── ◆", gold, 0.7);
+        draw_text_centered(&mut framebuffer, text_y + 2, "¡Completaste todos los niveles!", [235.0, 235.0, 245.0], 1.0);
+        let pulse = 0.55 + 0.45 * (time * 3.0).sin();
+        draw_text_centered(&mut framebuffer, text_y + 5, "Presiona cualquier tecla para salir", [120.0, 255.0, 150.0], pulse);
+        framebuffer
     }
 
     /// Renderiza la vista cenital (Top-Down) del juego.
@@ -1045,42 +1087,34 @@ impl GameRenderer {
 
     /// Muestra la pantalla de selección de nivel.
     pub fn show_level_select(&self, selected: usize, levels: &[Level]) {
-        let mut stdout = stdout();
-        stdout.execute(Clear(ClearType::All)).unwrap();
-
         let (cols, rows) = size().unwrap();
-        let center_x = cols / 2;
-        let start_y = rows / 4;
+        let framebuffer = self.render_level_select(cols as usize, rows as usize, selected, levels);
+        self.display_framebuffer(&framebuffer);
+    }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(12), start_y)).unwrap();
-        print!("{}", "🎯 SELECCIÓN DE NIVEL 🎯".with(Color::Cyan).bold());
+    /// Dibuja la pantalla de selección de nivel, resaltando el nivel elegido.
+    pub fn render_level_select(&self, width: usize, height: usize, selected: usize, levels: &[Level]) -> Framebuffer {
+        let time = self.start_time.elapsed().as_secs_f32();
+        let text_rows = levels.len() * 2 + 9;
+        let (mut framebuffer, text_y) = self.render_title_screen(width, height, "NIVELES", text_rows);
 
-        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 2)).unwrap();
-        print!("{}", "═══════════════════════".with(Color::DarkCyan));
+        let gold = [255.0, 200.0, 70.0];
+        let dim = [150.0, 150.0, 170.0];
+        draw_text_centered(&mut framebuffer, text_y, "◆ ─────────────────────── ◆", gold, 0.7);
 
+        // Todas las filas tienen el mismo ancho para que queden alineadas al centrarlas.
+        let name_width = levels.iter().map(|l| l.name.chars().count()).max().unwrap_or(0);
+        let pulse = 0.7 + 0.3 * (time * 4.0).sin();
         for (i, level) in levels.iter().enumerate() {
-            let y_pos = start_y + 4 + (i as u16 * 2);
-            stdout.execute(MoveTo(center_x.saturating_sub(20), y_pos)).unwrap();
-            
-            if i == selected {
-                print!("{}", format!("→ {} - {} items requeridos", level.name, level.required_items).with(Color::Yellow).bold());
-            } else {
-                print!("{}", format!("  {} - {} items requeridos", level.name, level.required_items).with(Color::White));
-            }
+            let (marker, color, alpha) = if i == selected { ('▶', [255.0, 225.0, 120.0], pulse) } else { (' ', dim, 1.0) };
+            let line = format!("{} {:<w$}   {} ◆", marker, level.name, level.required_items, w = name_width);
+            draw_text_centered(&mut framebuffer, text_y + 2 + i * 2, &line, color, alpha);
         }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(18), start_y + 12)).unwrap();
-        print!("{}", "↑/↓ o W/S: Seleccionar nivel".with(Color::DarkGrey));
-
-        stdout.execute(MoveTo(center_x.saturating_sub(18), start_y + 13)).unwrap();
-        print!("{}", "1/2/3: Ir a nivel directamente".with(Color::DarkGrey));
-
-        stdout.execute(MoveTo(center_x.saturating_sub(15), start_y + 15)).unwrap();
-        print!("{}", "Presiona ENTER para jugar".with(Color::Green).bold());
-
-        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 17)).unwrap();
-        print!("{}", "ESC: Volver al menú".with(Color::DarkGrey));
-
-        stdout.flush().unwrap();
+        let help_y = text_y + 3 + levels.len() * 2;
+        draw_text_centered(&mut framebuffer, help_y, "↑/↓ o W/S: elegir   ·   1/2/3: ir directo", dim, 1.0);
+        draw_text_centered(&mut framebuffer, help_y + 3, "▶  ENTER para jugar  ◀", [120.0, 255.0, 150.0], 0.55 + 0.45 * (time * 3.0).sin());
+        draw_text_centered(&mut framebuffer, help_y + 5, "ESC: volver al menú", dim, 0.8);
+        framebuffer
     }
 }

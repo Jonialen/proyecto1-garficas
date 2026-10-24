@@ -186,6 +186,7 @@ fn main() {
                                 );
                                 
                                 renderer.start_level_intro(&levels[current_level].name);
+                                renderer.clear_screen();
                                 level_complete = false;
                                 game_state = GameState::Playing;
                                 first_render = true;
@@ -232,6 +233,7 @@ fn main() {
                             levels[current_level].get_height() * renderer.get_cell_height(),
                         );
                         renderer.start_level_intro(&levels[current_level].name);
+                        renderer.clear_screen();
                         
                         first_render = true;
                     } else {
@@ -302,6 +304,7 @@ fn main() {
                             KeyCode::Char('e') => player.rotate(0.08),
                             KeyCode::Char('c') => {
                                 camera.toggle_mode();
+                                renderer.clear_screen();
                                 player.has_moved = true;
                             }
                             KeyCode::Char('x') | KeyCode::Esc => running = false,
