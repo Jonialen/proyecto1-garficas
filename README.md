@@ -5,9 +5,15 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 ## Características
 
 - **Motor de Renderizado 3D en la Terminal**: Utiliza raycasting para crear una perspectiva en primera persona directamente en la terminal.
+- **Doble Resolución Vertical**: Cada celda de la terminal muestra dos píxeles usando el carácter `▀` (color de primer plano arriba, color de fondo abajo).
+- **Color de 24 bits e Iluminación**: Niebla exponencial según la distancia, sombreado distinto para las caras norte/sur y un cielo que se funde con el horizonte.
+- **Texturas Procedurales**: Paredes de ladrillo y suelo de baldosas generados en tiempo real (floor casting), sin archivos de imagen.
+- **Objetos en 3D**: Los ítems son diamantes que giran y flotan, y la meta es una esfera que pulsa; ambos con iluminación, sombra en el suelo y z-buffer.
+- **Efectos**: Destello dorado al recoger un ítem, balanceo de cámara al caminar y transiciones con fundido entre niveles.
+- **Minimapa**: Semitransparente, con desplazamiento suave centrado en el jugador.
 - **Doble Cámara**: Cambia entre una vista en primera persona y una vista cenital (top-down) para navegar por el laberinto.
 - **Múltiples Niveles**: Incluye 3 niveles de dificultad creciente.
-- **Interfaz de Usuario en Terminal**: Menús, selección de nivel y pantalla de victoria renderizados con `crossterm`.
+- **Interfaz de Usuario en Terminal**: Menú, selección de nivel y pantalla de victoria con títulos animados en letras de bloque.
 - **Controles Intuitivos**: Movimiento y rotación estándar para una fácil navegación.
 
 ## Cómo Jugar
@@ -15,13 +21,14 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 ### Prerrequisitos
 
 - [Rust](https://www.rust-lang.org/tools/install)
+- Una terminal con soporte de color de 24 bits (truecolor), por ejemplo Ghostty, Kitty, Alacritty, WezTerm o Foot.
 
 ### Compilación y Ejecución
 
 1. Clona el repositorio:
    ```bash
-   git clone https://github.com/tu_usuario/raytracer-maze.git
-   cd raytracer-maze
+   git clone https://github.com/Jonialen/proyecto1-garficas.git
+   cd proyecto1-garficas
    ```
 
 2. Compila y ejecuta el proyecto con Cargo:
@@ -49,7 +56,7 @@ El proyecto está organizado en los siguientes módulos principales dentro de `s
   - `state.rs`: Define los diferentes estados del juego (menú, jugando, etc.).
   - `entity.rs`: (Actualmente en desuso) Estructura para futuras entidades en el juego.
 - **`graphics/`**: Se encarga de todo el renderizado en la terminal.
-  - `renderer.rs`: El motor de renderizado principal. Dibuja el mundo 3D, el mapa 2D, los menús y la UI.
+  - `renderer.rs`: El motor de renderizado principal. Dibuja el mundo 3D (paredes, suelo, objetos y efectos), el mapa 2D, los menús y la UI.
   - `framebuffer.rs`: Abstracción de un búfer de píxeles para dibujar en la terminal.
   - `pixel.rs`: Representa un único carácter con color en la terminal.
 - **`math/`**: Proporciona herramientas matemáticas básicas.
