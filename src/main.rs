@@ -20,9 +20,9 @@ const START_INVULNERABILITY: f32 = 2.0;
 /// Distancia a la que un golpe empuja al jugador lejos del enemigo.
 const KNOCKBACK: f32 = 0.5;
 
-/// Prepara todo lo que se reinicia al empezar un nivel: jugador, enemigos, renderizador y
-/// framebuffer cenital. Muestra `title` en la presentación del nivel.
-fn start_level(level: &Level, title: &str, cols: usize, rows: usize) -> (Player, Vec<Enemy>, GameRenderer, Framebuffer) {
+/// Prepara todo lo que se reinicia al empezar un nivel: jugador, enemigos y renderizador.
+/// Muestra `title` en la presentación del nivel.
+fn start_level(level: &Level, title: &str, cols: usize, rows: usize) -> (Player, Vec<Enemy>, GameRenderer) {
     let mut player = Player::from_map(&level.map);
     player.invulnerable = START_INVULNERABILITY;
     let enemies = level
@@ -33,13 +33,9 @@ fn start_level(level: &Level, title: &str, cols: usize, rows: usize) -> (Player,
         .collect();
 
     let mut renderer = GameRenderer::new(cols, rows, level.get_width(), level.get_height());
-    let fb_topdown = Framebuffer::new(
-        level.get_width() * renderer.get_cell_width(),
-        level.get_height() * renderer.get_cell_height(),
-    );
     renderer.start_level_intro(title);
     renderer.clear_screen();
-    (player, enemies, renderer, fb_topdown)
+    (player, enemies, renderer)
 }
 
 struct FpsCounter {
@@ -158,11 +154,8 @@ fn main() {
         levels[current_level].get_width(),
         levels[current_level].get_height(),
     );
-    let mut fb_topdown = Framebuffer::new(
-        levels[current_level].get_width() * renderer.get_cell_width(),
-        levels[current_level].get_height() * renderer.get_cell_height(),
-    );
-    let mut fb_firstperson = Framebuffer::new(cols, rows.saturating_sub(4));
+    // Las dos cámaras dibujan a pantalla completa, dejando las últimas filas para la UI.
+    let mut fb_game = Framebuffer::new(cols, rows.saturating_sub(4));
 
     while running {
         let frame_start = Instant::now();
@@ -213,7 +206,7 @@ fn main() {
                                 collected_items = 0;
                                 lives = MAX_LIVES;
                                 let level = &levels[current_level];
-                                (player, enemies, renderer, fb_topdown) = start_level(level, &level.name, cols, rows);
+                                (player, enemies, renderer) = start_level(level, &level.name, cols, rows);
                                 level_complete = false;
                                 last_update = Instant::now();
                                 game_state = GameState::Playing;
@@ -249,7 +242,7 @@ fn main() {
                             lives = MAX_LIVES;
                             let level = &levels[current_level];
                             let title = format!("Sin vidas · {}", level.name);
-                            (player, enemies, renderer, fb_topdown) = start_level(level, &title, cols, rows);
+                            (player, enemies, renderer) = start_level(level, &title, cols, rows);
                         } else {
                             if let Some(audio) = &audio { audio.play(Sfx::Hurt); }
                             renderer.trigger_damage_flash();
@@ -285,7 +278,7 @@ fn main() {
                         collected_items = 0;
                         lives = MAX_LIVES;
                         let level = &levels[current_level];
-                        (player, enemies, renderer, fb_topdown) = start_level(level, &level.name, cols, rows);
+                        (player, enemies, renderer) = start_level(level, &level.name, cols, rows);
                     } else {
                         // Juego completado
                         game_state = GameState::Victory;
@@ -299,21 +292,21 @@ fn main() {
                     match camera.mode {
                         CameraMode::TopDown => {
                             renderer.render_top_down(
-                                &mut fb_topdown,
+                                &mut fb_game,
                                 &level_ref.map,
                                 &player,
-                                &[],
+                                &enemies,
                             );
-                            renderer.display_framebuffer(&fb_topdown);
+                            renderer.display_framebuffer(&fb_game);
                         }
                         CameraMode::FirstPerson => {
                             renderer.render_first_person(
-                                &mut fb_firstperson,
+                                &mut fb_game,
                                 &player,
                                 &level_ref.map,
                                 &enemies,
                             );
-                            renderer.display_framebuffer(&fb_firstperson);
+                            renderer.display_framebuffer(&fb_game);
                         }
                     }
 

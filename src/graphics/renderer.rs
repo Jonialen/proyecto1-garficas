@@ -9,7 +9,7 @@ use std::collections::{HashSet};
 use std::io::{BufWriter, Write, stdout};
 use std::time::Instant;
 
-use crate::game::{Enemy, EnemyState, Entity, Player, Level};
+use crate::game::{Enemy, EnemyState, Player, Level};
 use crate::graphics::{Framebuffer, Pixel};
 use crate::math::Vec2;
 
@@ -88,6 +88,17 @@ const GHOST_CHASE_COLOR: [f32; 3] = [175.0, 55.0, 95.0];
 const GHOST_EYES: [f32; 3] = [190.0, 245.0, 255.0];
 const GHOST_EYES_CHASE: [f32; 3] = [255.0, 50.0, 50.0];
 const MINIMAP_ENEMY: [f32; 3] = [200.0, 70.0, 255.0];
+
+/// Direcciones en las que se calcula la visibilidad del jugador en la vista cenital.
+const VISIBILITY_RAYS: usize = 720;
+/// Alcance de la linterna del jugador en la vista cenital, en unidades del mundo.
+const TOPDOWN_LIGHT_RADIUS: f32 = 6.0;
+/// Luz mínima de la vista cenital fuera del alcance de la linterna.
+const TOPDOWN_AMBIENT: f32 = 0.28;
+/// Brillo que suma la linterna sobre el suelo a distancia cero.
+const TOPDOWN_LIGHT_STRENGTH: f32 = 1.8;
+/// Ancho del bisel de las paredes en la vista cenital, como fracción de la celda.
+const TOPDOWN_BEVEL: f32 = 0.14;
 
 /// Tipo de sprite que se dibuja en la vista en primera persona.
 #[derive(Clone, Copy)]
@@ -243,6 +254,61 @@ fn draw_text_centered(framebuffer: &mut Framebuffer, y: usize, text: &str, color
         };
         let fg = lerp_color(bg, color, alpha);
         framebuffer.set_pixel(x, y, Pixel::with_bg(to_rgb(fg), to_rgb(bg), ch));
+    }
+}
+
+/// Pinta un disco de radio `radius` (píxeles) centrado en `center`. Con `glow`, la opacidad
+/// cae hacia el borde para formar un halo.
+fn draw_disc(buf: &mut [[f32; 3]], width: usize, center: (f32, f32), radius: f32, color: [f32; 3], alpha: f32, glow: bool) {
+    let height = buf.len() / width;
+    let (x0, x1) = ((center.0 - radius).max(0.0) as usize, ((center.0 + radius).ceil() as usize).min(width));
+    let (y0, y1) = ((center.1 - radius).max(0.0) as usize, ((center.1 + radius).ceil() as usize).min(height));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let d = ((x as f32 + 0.5 - center.0).powi(2) + (y as f32 + 0.5 - center.1).powi(2)).sqrt() / radius;
+            if d >= 1.0 { continue; }
+            let a = if glow { alpha * (1.0 - d) * (1.0 - d) } else { alpha };
+            let idx = y * width + x;
+            buf[idx] = lerp_color(buf[idx], color, a);
+        }
+    }
+}
+
+/// Dibuja una esfera iluminada vista desde arriba, de radio `radius` (píxeles).
+fn draw_topdown_ball(buf: &mut [[f32; 3]], width: usize, center: (f32, f32), radius: f32, color: [f32; 3]) {
+    let height = buf.len() / width;
+    let (x0, x1) = ((center.0 - radius).max(0.0) as usize, ((center.0 + radius).ceil() as usize).min(width));
+    let (y0, y1) = ((center.1 - radius).max(0.0) as usize, ((center.1 + radius).ceil() as usize).min(height));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let u = (x as f32 + 0.5 - center.0) / radius;
+            let v = (center.1 - (y as f32 + 0.5)) / radius;
+            let d2 = u * u + v * v;
+            if d2 < 1.0 {
+                buf[y * width + x] = lit_surface(color, [u, v, -(1.0 - d2).sqrt()], 0.35, 24.0);
+            }
+        }
+    }
+}
+
+/// Dibuja un ítem visto desde arriba: una pirámide de cuatro caras con luz desde arriba a la izquierda.
+fn draw_topdown_gem(buf: &mut [[f32; 3]], width: usize, center: (f32, f32), radius: f32) {
+    let height = buf.len() / width;
+    let (x0, x1) = ((center.0 - radius).max(0.0) as usize, ((center.0 + radius).ceil() as usize).min(width));
+    let (y0, y1) = ((center.1 - radius).max(0.0) as usize, ((center.1 + radius).ceil() as usize).min(height));
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let u = (x as f32 + 0.5 - center.0) / radius;
+            let v = (y as f32 + 0.5 - center.1) / radius;
+            if u.abs() + v.abs() > 1.0 { continue; }
+            let tone = match (u < 0.0, v < 0.0) {
+                (true, true) => 1.25,
+                (false, true) => 1.0,
+                (true, false) => 0.85,
+                (false, false) => 0.6,
+            };
+            buf[y * width + x] = [GEM_COLOR[0] * tone, GEM_COLOR[1] * tone, GEM_COLOR[2] * tone];
+        }
     }
 }
 
@@ -543,121 +609,168 @@ impl GameRenderer {
         framebuffer
     }
 
-    /// Renderiza la vista cenital (Top-Down) del juego.
+    /// Renderiza la vista cenital (top-down): mapa iluminado por la linterna del jugador,
+    /// con paredes en relieve, objetos animados y enemigos.
     pub fn render_top_down(
         &mut self,
         framebuffer: &mut Framebuffer,
         map: &[Vec<u8>],
         player: &Player,
-        _entities: &[Entity],
+        enemies: &[Enemy],
     ) {
-        framebuffer.clear(Color::Black);
-
         let (px, py) = player.get_grid_position();
-        if map[py][px] == 5 { // Si el jugador está sobre un ítem, lo marca como recogido.
+        if map[py][px] == 5 {
             self.collected_positions.insert((px, py));
         }
 
-        let map_width = map[0].len();
-        let map_height = map.len();
-        
-        // Dibuja el borde del mapa.
-        for x in 0..map_width * self.cell_width {
-            framebuffer.set_pixel(x, 0, Pixel::new(Color::DarkCyan, '═'));
-        }
-        for x in 0..map_width * self.cell_width {
-            let y = map_height * self.cell_height - 1;
-            if y < framebuffer.height {
-                framebuffer.set_pixel(x, y, Pixel::new(Color::DarkCyan, '═'));
-            }
-        }
-        for y in 0..map_height * self.cell_height {
-            if y < framebuffer.height {
-                framebuffer.set_pixel(0, y, Pixel::new(Color::DarkCyan, '║'));
-                let x = map_width * self.cell_width - 1;
-                if x < framebuffer.width {
-                    framebuffer.set_pixel(x, y, Pixel::new(Color::DarkCyan, '║'));
-                }
-            }
-        }
-        framebuffer.set_pixel(0, 0, Pixel::new(Color::DarkCyan, '╔'));
-        framebuffer.set_pixel(map_width * self.cell_width - 1, 0, Pixel::new(Color::DarkCyan, '╗'));
-        let bottom_left_y = map_height * self.cell_height - 1;
-        if bottom_left_y < framebuffer.height {
-            framebuffer.set_pixel(0, bottom_left_y, Pixel::new(Color::DarkCyan, '╚'));
-            framebuffer.set_pixel(map_width * self.cell_width - 1, bottom_left_y, Pixel::new(Color::DarkCyan, '╝'));
-        }
+        let time = self.start_time.elapsed().as_secs_f32();
+        let width = framebuffer.width;
+        let hi_height = framebuffer.height * 2;
+        let map_w = map.first().map_or(0, |row| row.len());
+        let map_h = map.len();
+        if map_w == 0 || map_h == 0 { return; }
 
-        // Renderiza el contenido del mapa.
-        for (row_idx, fila) in map.iter().enumerate() {
-            for (col_idx, &celda) in fila.iter().enumerate() {
-                let actual_cell = if celda == 5 && self.collected_positions.contains(&(col_idx, row_idx)) {
-                    0 // Si el ítem fue recogido, se muestra como espacio vacío.
+        // Celdas cuadradas lo más grandes posible, centradas en la pantalla.
+        let cell = (width / map_w).min(hi_height / map_h).max(1);
+        let origin = (
+            width.saturating_sub(cell * map_w) as f32 / 2.0,
+            hi_height.saturating_sub(cell * map_h) as f32 / 2.0,
+        );
+        let cell_f = cell as f32;
+        let to_screen = |p: Vec2| (origin.0 + p.x * cell_f, origin.1 + p.y * cell_f);
+
+        // Visibilidad desde el jugador: distancia a la pared en cada dirección.
+        let visibility: Vec<f32> = (0..VISIBILITY_RAYS)
+            .map(|i| {
+                let angle = i as f32 / VISIBILITY_RAYS as f32 * std::f32::consts::TAU;
+                let dir = Vec2::new(angle.cos(), angle.sin());
+                self.cast_ray_with_type(player.position, dir, map).distance
+            })
+            .collect();
+        let facing = player.direction.y.atan2(player.direction.x);
+        let is_wall = |x: isize, y: isize| {
+            x < 0 || y < 0 || map.get(y as usize).and_then(|r| r.get(x as usize)).is_none_or(|&c| c == 1)
+        };
+
+        let mut hi_res = vec![[0.0f32; 3]; width * hi_height];
+        for y in 0..hi_height {
+            for x in 0..width {
+                let idx = y * width + x;
+                let wx = (x as f32 + 0.5 - origin.0) / cell_f;
+                let wy = (y as f32 + 0.5 - origin.1) / cell_f;
+                if wx < 0.0 || wy < 0.0 || wx >= map_w as f32 || wy >= map_h as f32 {
+                    // Fuera del mapa: el mismo degradado de fondo que los menús.
+                    hi_res[idx] = lerp_color(SKY_TOP, FOG_COLOR, y as f32 / hi_height as f32 * 0.6);
+                    continue;
+                }
+
+                let (cx, cy) = (wx as usize, wy as usize);
+                let (fx, fy) = (wx.fract(), wy.fract());
+                let (ix, iy) = (cx as isize, cy as isize);
+                let dx = wx - player.position.x;
+                let dy = wy - player.position.y;
+                let distance = (dx * dx + dy * dy).sqrt();
+                let falloff = (1.0 - distance / TOPDOWN_LIGHT_RADIUS).max(0.0).powf(1.5);
+
+                hi_res[idx] = if map[cy][cx] == 1 {
+                    // Pared vista desde arriba: piedra con bisel donde da a un pasillo.
+                    let mut tone = 1.0;
+                    if fy < TOPDOWN_BEVEL && !is_wall(ix, iy - 1) { tone = 1.3; }
+                    if fx < TOPDOWN_BEVEL && !is_wall(ix - 1, iy) { tone = 1.2; }
+                    if fy > 1.0 - TOPDOWN_BEVEL && !is_wall(ix, iy + 1) { tone = 0.55; }
+                    if fx > 1.0 - TOPDOWN_BEVEL && !is_wall(ix + 1, iy) { tone = 0.65; }
+                    let texel = brick_texel(fx, fy, (cx as i32, cy as i32), cell_f * 4.0);
+                    let light = tone * (TOPDOWN_AMBIENT + 0.75 * falloff);
+                    [texel[0] * light, texel[1] * light, texel[2] * light]
                 } else {
-                    celda
-                };
-
-                let pixel = match actual_cell {
-                    0 => Pixel::new(Color::Black, ' '),
-                    1 => Pixel::new(Color::White, '█'),
-                    2 => Pixel::new(Color::Green, '▓'),
-                    3 => Pixel::new(Color::Red, '▓'),
-                    5 => Pixel::new(Color::Yellow, '◆'),
-                    _ => Pixel::new(Color::Red, '?'),
-                };
-
-                // Añade textura a las paredes para un efecto visual.
-                let enhanced_pixel = if actual_cell == 1 {
-                    if (col_idx + row_idx) % 3 == 0 {
-                        Pixel::new(Color::Grey, '█')
-                    } else {
-                        pixel
+                    // Suelo: linterna en cono con línea de visión real y sombra de las paredes.
+                    let angle = dy.atan2(dx).rem_euclid(std::f32::consts::TAU);
+                    let bin = (angle / std::f32::consts::TAU * VISIBILITY_RAYS as f32) as usize % VISIBILITY_RAYS;
+                    let visible = distance <= visibility[bin] + 0.05;
+                    let mut off_axis = (angle - facing).rem_euclid(std::f32::consts::TAU);
+                    if off_axis > std::f32::consts::PI { off_axis = std::f32::consts::TAU - off_axis; }
+                    let cone = 1.0 - ((off_axis - player.fov / 2.0) / 0.35).clamp(0.0, 1.0);
+                    let lit = if visible { falloff * (0.3 + 0.7 * cone) } else { 0.0 };
+                    let mut shade = TOPDOWN_AMBIENT + TOPDOWN_LIGHT_STRENGTH * lit;
+                    if (fx < 0.22 && is_wall(ix - 1, iy)) || (fy < 0.22 && is_wall(ix, iy - 1)) {
+                        shade *= 0.6;
                     }
-                } else {
-                    pixel
-                };
 
-                for sub_row in 0..self.cell_height {
-                    for sub_col in 0..self.cell_width {
-                        let fb_x = col_idx * self.cell_width + sub_col;
-                        let fb_y = row_idx * self.cell_height + sub_row;
-                        
-                        if fb_x > 0 && fb_x < framebuffer.width - 1 && fb_y > 0 && fb_y < framebuffer.height - 1 {
-                            framebuffer.set_pixel(fb_x, fb_y, enhanced_pixel);
-                        }
+                    let base = match map[cy][cx] {
+                        2 => lerp_color(floor_texel(wx, wy, 0.0), MINIMAP_START, 0.35),
+                        3 => lerp_color(floor_texel(wx, wy, 0.0), MINIMAP_GOAL, 0.3),
+                        _ => floor_texel(wx, wy, 0.0),
+                    };
+                    let warm = lerp_color([1.0, 1.0, 1.0], [1.15, 1.0, 0.75], lit);
+                    [base[0] * shade * warm[0], base[1] * shade * warm[1], base[2] * shade * warm[2]]
+                };
+            }
+        }
+
+        // Ítems y meta: halo pulsante y figura sombreada.
+        for (cy, row) in map.iter().enumerate() {
+            for (cx, &c) in row.iter().enumerate() {
+                let center = to_screen(Vec2::new(cx as f32 + 0.5, cy as f32 + 0.5));
+                let phase = hash2(cx as i32, cy as i32) * std::f32::consts::TAU;
+                let pulse = 0.5 + 0.5 * (time * 3.0 + phase).sin();
+                match c {
+                    5 => {
+                        draw_disc(&mut hi_res, width, center, (0.5 + 0.1 * pulse) * cell_f, FLASH_COLOR, 0.45, true);
+                        draw_topdown_gem(&mut hi_res, width, center, 0.3 * cell_f * (0.85 + 0.15 * pulse));
                     }
+                    3 => {
+                        draw_disc(&mut hi_res, width, center, (0.75 + 0.15 * pulse) * cell_f, ORB_COLOR, 0.5, true);
+                        draw_topdown_ball(&mut hi_res, width, center, 0.28 * cell_f, ORB_COLOR);
+                    }
+                    _ => {}
                 }
             }
         }
 
-        // Renderiza al jugador y su dirección.
-        let player_center_x = px * self.cell_width + self.cell_width / 2;
-        let player_center_y = py * self.cell_height + self.cell_height / 2;
-        
-        for sub_row in 0..self.cell_height {
-            for sub_col in 0..self.cell_width {
-                let fb_x = px * self.cell_width + sub_col;
-                let fb_y = py * self.cell_height + sub_row;
-                if fb_x > 0 && fb_x < framebuffer.width - 1 && fb_y > 0 && fb_y < framebuffer.height - 1 {
-                    framebuffer.set_pixel(fb_x, fb_y, Pixel::new(Color::Cyan, '●'));
-                }
+        // Enemigos: fantasmas con ojos que miran hacia el jugador.
+        for enemy in enemies {
+            let chasing = enemy.state == EnemyState::Chase;
+            let center = to_screen(enemy.position);
+            if chasing {
+                draw_disc(&mut hi_res, width, center, 0.7 * cell_f, DAMAGE_FLASH_COLOR, 0.35, true);
             }
-        }
-        
-        let dir_length = (self.cell_width.max(self.cell_height) as f32 * 0.8) as usize;
-        for i in 1..=dir_length {
-            let dir_x = player_center_x as f32 + player.direction.x * i as f32;
-            let dir_y = player_center_y as f32 + player.direction.y * i as f32;
-            let dx = dir_x as usize;
-            let dy = dir_y as usize;
-            
-            if dx > 0 && dx < framebuffer.width - 1 && dy > 0 && dy < framebuffer.height - 1 {
-                let symbol = if i == dir_length { '▶' } else { '─' };
-                framebuffer.set_pixel(dx, dy, Pixel::new(Color::Yellow, symbol));
+            draw_topdown_ball(&mut hi_res, width, center, 0.32 * cell_f, if chasing { GHOST_CHASE_COLOR } else { GHOST_COLOR });
+            let look = Vec2::new(player.position.x - enemy.position.x, player.position.y - enemy.position.y).normalize();
+            let side = Vec2::new(-look.y, look.x);
+            for s in [-1.0, 1.0] {
+                let eye = Vec2::new(
+                    enemy.position.x + (look.x + side.x * s) * 0.12,
+                    enemy.position.y + (look.y + side.y * s) * 0.12,
+                );
+                let eye_color = if chasing { GHOST_EYES_CHASE } else { GHOST_EYES };
+                draw_disc(&mut hi_res, width, to_screen(eye), (0.08 * cell_f).max(0.8), eye_color, 1.0, false);
             }
         }
 
-        self.render_vision_rays(framebuffer, player, map);
+        // Jugador: parpadea mientras es invulnerable.
+        let blink = player.invulnerable > 0.0 && (time * 12.0).sin() < 0.0;
+        if !blink {
+            draw_topdown_ball(&mut hi_res, width, to_screen(player.position), 0.26 * cell_f, MINIMAP_PLAYER);
+            let tip = Vec2::new(player.position.x + player.direction.x * 0.42, player.position.y + player.direction.y * 0.42);
+            draw_disc(&mut hi_res, width, to_screen(tip), (0.1 * cell_f).max(0.8), [255.0, 255.0, 255.0], 1.0, false);
+        }
+
+        self.render_flashes(&mut hi_res, width, hi_height);
+        let darkness = self.transition_darkness();
+        if darkness > 0.0 {
+            for pixel in hi_res.iter_mut() {
+                *pixel = lerp_color(*pixel, [0.0, 0.0, 0.0], darkness);
+            }
+        }
+
+        for y in 0..framebuffer.height {
+            for x in 0..width {
+                let top = to_rgb(hi_res[(2 * y) * width + x]);
+                let bottom = to_rgb(hi_res[(2 * y + 1) * width + x]);
+                framebuffer.set_pixel(x, y, Pixel::with_bg(top, bottom, '▀'));
+            }
+        }
+        self.render_level_title(framebuffer);
     }
 
     /// Inicia la presentación del nivel: pantalla negra con el título y luego aparición gradual.
@@ -1039,29 +1152,6 @@ impl GameRenderer {
         }
         for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 0.0)] {
             plot(center_x + dx, center_y + dy, MINIMAP_PLAYER);
-        }
-    }
-
-    /// Renderiza los rayos de visión del jugador en la vista cenital.
-    fn render_vision_rays(&self, framebuffer: &mut Framebuffer, player: &Player, map: &[Vec<u8>]) {
-        let center_x = (player.position.x * self.cell_width as f32) as usize;
-        let center_y = (player.position.y * self.cell_height as f32) as usize;
-
-        for i in 0..5 {
-            let angle_offset = (i as f32 - 2.0) * (player.fov / 4.0);
-            let ray_dir = player.direction.rotate(angle_offset);
-
-            let distance = self.cast_ray_with_type(player.position, ray_dir, map).distance;
-            let end_x = player.position.x + ray_dir.x * distance;
-            let end_y = player.position.y + ray_dir.y * distance;
-
-            let screen_end_x = (end_x * self.cell_width as f32) as usize;
-            let screen_end_y = (end_y * self.cell_height as f32) as usize;
-
-            let safe_end_x = screen_end_x.min(framebuffer.width - 1);
-            let safe_end_y = screen_end_y.min(framebuffer.height - 1);
-
-            framebuffer.draw_line(center_x, center_y, safe_end_x, safe_end_y, Pixel::new(Color::DarkYellow, '·'));
         }
     }
 
