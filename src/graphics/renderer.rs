@@ -40,6 +40,18 @@ const MINIMAP_ITEM: [f32; 3] = [255.0, 215.0, 40.0];
 const MINIMAP_PLAYER: [f32; 3] = [80.0, 230.0, 255.0];
 const MINIMAP_DIRECTION: [f32; 3] = [255.0, 90.0, 90.0];
 
+/// Duración del destello al recoger un ítem, en segundos.
+const FLASH_DURATION: f32 = 0.45;
+/// Opacidad máxima del destello en los bordes de la pantalla.
+const FLASH_STRENGTH: f32 = 0.6;
+const FLASH_COLOR: [f32; 3] = [255.0, 210.0, 70.0];
+/// Amplitud del balanceo de cámara, como fracción de la altura de la pantalla.
+const BOB_AMPLITUDE: f32 = 0.018;
+/// Radianes de balanceo por unidad caminada (un ciclo cada ~0.9 unidades).
+const BOB_FREQUENCY: f32 = 7.0;
+/// Segundos que tarda la cámara en estabilizarse al dejar de caminar.
+const BOB_SETTLE_TIME: f32 = 0.3;
+
 /// Mitad de la altura de un ítem (diamante), en unidades del mundo.
 const GEM_HALF_HEIGHT: f32 = 0.2;
 /// Relación ancho/alto en pantalla del diamante.
@@ -182,6 +194,11 @@ pub struct GameRenderer {
     minimap_size: usize, // Tamaño del minimapa en la vista de primera persona.
     collected_positions: HashSet<(usize, usize)>, // Almacena las posiciones de los ítems recogidos.
     start_time: Instant, // Referencia de tiempo para las animaciones.
+    last_frame: Instant, // Momento del último cuadro, para animaciones dependientes del tiempo.
+    last_position: Option<Vec2>, // Posición del jugador en el cuadro anterior.
+    walk_distance: f32, // Distancia total caminada; define la fase del balanceo de cámara.
+    bob_strength: f32, // Intensidad actual del balanceo (1 = caminando, decae a 0 al detenerse).
+    pickup_flash: Option<Instant>, // Momento en que se recogió el último ítem.
 }
 
 impl GameRenderer {
@@ -226,6 +243,11 @@ impl GameRenderer {
             minimap_size,
             collected_positions: HashSet::new(),
             start_time: Instant::now(),
+            last_frame: Instant::now(),
+            last_position: None,
+            walk_distance: 0.0,
+            bob_strength: 0.0,
+            pickup_flash: None,
         }
     }
 
@@ -410,6 +432,41 @@ impl GameRenderer {
         self.render_vision_rays(framebuffer, player, map);
     }
 
+    /// Dispara el destello de pantalla y el resaltado del contador al recoger un ítem.
+    pub fn trigger_pickup_flash(&mut self) {
+        self.pickup_flash = Some(Instant::now());
+    }
+
+    /// Devuelve la intensidad actual del destello de recolección, de 1 (recién recogido) a 0.
+    fn pickup_flash_intensity(&self) -> f32 {
+        self.pickup_flash.map_or(0.0, |start| {
+            let t = start.elapsed().as_secs_f32() / FLASH_DURATION;
+            if t >= 1.0 { 0.0 } else { (1.0 - t) * (1.0 - t) }
+        })
+    }
+
+    /// Actualiza el balanceo de cámara según cuánto se movió el jugador desde el último cuadro
+    /// y devuelve el desplazamiento vertical del horizonte en píxeles.
+    fn update_head_bob(&mut self, player: &Player, hi_height: usize) -> f32 {
+        let dt = self.last_frame.elapsed().as_secs_f32();
+        self.last_frame = Instant::now();
+
+        let moved = self.last_position.map_or(0.0, |last| {
+            Vec2::new(player.position.x - last.x, player.position.y - last.y).length()
+        });
+        self.last_position = Some(player.position);
+
+        // Un salto grande (cambio de nivel o reinicio) no cuenta como caminar.
+        if moved > 0.0 && moved < 1.0 {
+            self.walk_distance += moved;
+            self.bob_strength = 1.0;
+        } else {
+            self.bob_strength = (self.bob_strength - dt / BOB_SETTLE_TIME).max(0.0);
+        }
+
+        (self.walk_distance * BOB_FREQUENCY).sin() * BOB_AMPLITUDE * self.bob_strength * hi_height as f32
+    }
+
     /// Renderiza la vista en primera persona (First-Person) del juego.
     pub fn render_first_person(
         &mut self,
@@ -426,7 +483,7 @@ impl GameRenderer {
         // dos píxeles usando '▀' (mitad superior = primer plano, mitad inferior = fondo).
         let width = framebuffer.width;
         let hi_height = framebuffer.height * 2;
-        let horizon = hi_height as f32 / 2.0;
+        let horizon = hi_height as f32 / 2.0 + self.update_head_bob(player, hi_height);
         let mut hi_res = vec![[0.0f32; 3]; width * hi_height];
 
         // Cielo y suelo: el cielo se funde con la niebla en el horizonte y el suelo
@@ -472,7 +529,8 @@ impl GameRenderer {
             }
         }
 
-        self.render_sprites(&mut hi_res, &z_buffer, width, hi_height, player, map);
+        self.render_sprites(&mut hi_res, &z_buffer, width, hi_height, horizon, player, map);
+        self.render_pickup_flash(&mut hi_res, width, hi_height);
 
         self.render_minimap(&mut hi_res, width, hi_height, player, map);
 
@@ -488,10 +546,10 @@ impl GameRenderer {
 
     /// Renderiza los objetos del mapa (ítems y meta) como sprites 3D, de atrás hacia adelante,
     /// respetando el z-buffer de las paredes.
-    fn render_sprites(&self, buf: &mut [[f32; 3]], z_buffer: &[f32], width: usize, height: usize, player: &Player, map: &[Vec<u8>]) {
+    #[allow(clippy::too_many_arguments)]
+    fn render_sprites(&self, buf: &mut [[f32; 3]], z_buffer: &[f32], width: usize, height: usize, horizon: f32, player: &Player, map: &[Vec<u8>]) {
         let time = self.start_time.elapsed().as_secs_f32();
         let dir = player.direction.normalize();
-        let horizon = height as f32 / 2.0;
         let angle_step = player.fov / width as f32;
 
         let mut sprites: Vec<(f32, f32, usize, usize, u8)> = Vec::new();
@@ -559,6 +617,23 @@ impl GameRenderer {
                         buf[y * width + x] = apply_fog(color, depth);
                     }
                 }
+            }
+        }
+    }
+
+    /// Tiñe la escena de dorado tras recoger un ítem, con más intensidad en los bordes.
+    fn render_pickup_flash(&self, buf: &mut [[f32; 3]], width: usize, height: usize) {
+        let intensity = self.pickup_flash_intensity();
+        if intensity <= 0.0 { return; }
+
+        let (cx, cy) = (width as f32 / 2.0, height as f32 / 2.0);
+        for y in 0..height {
+            for x in 0..width {
+                let dx = (x as f32 - cx) / cx;
+                let dy = (y as f32 - cy) / cy;
+                let edge = ((dx * dx + dy * dy) / 2.0).sqrt();
+                let idx = y * width + x;
+                buf[idx] = lerp_color(buf[idx], FLASH_COLOR, intensity * FLASH_STRENGTH * (0.35 + 0.65 * edge));
             }
         }
     }
@@ -764,10 +839,14 @@ impl GameRenderer {
         print!("{}", format!("[WASD:move | QE:rotate | C:camera | X:quit] FPS: {:.0}", fps).with(Color::White));
         
         stdout.execute(MoveTo(0, rows.saturating_sub(2))).unwrap();
-        print!("{}", format!(
-            "Nivel {}/{}: {} | Items: {}/{} ◆ | Pos: ({:.1}, {:.1})",
-            level, total_levels, level_name, collected, required, px, py
-        ).with(Color::Yellow));
+        print!("{}", format!("Nivel {}/{}: {} | ", level, total_levels, level_name).with(Color::Yellow));
+        let items = format!("Items: {}/{} ◆", collected, required);
+        if self.pickup_flash_intensity() > 0.0 {
+            print!("{}", items.with(Color::Rgb { r: 255, g: 240, b: 160 }).bold());
+        } else {
+            print!("{}", items.with(Color::Yellow));
+        }
+        print!("{}", format!(" | Pos: ({:.1}, {:.1})", px, py).with(Color::Yellow));
         
         stdout.flush().unwrap();
     }

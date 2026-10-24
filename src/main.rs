@@ -201,6 +201,7 @@ fn main() {
                 let (px, py) = player.get_grid_position();
                 if level.collect_item(px, py) {
                     collected_items += 1;
+                    renderer.trigger_pickup_flash();
                     player.has_moved = true; // Forzar re-render
                 }
 
@@ -231,7 +232,8 @@ fn main() {
                     }
                 }
 
-                if player.has_moved || first_render {
+                // La vista en primera persona tiene animaciones, así que se redibuja en cada cuadro.
+                if player.has_moved || first_render || camera.mode == CameraMode::FirstPerson {
                     let level_ref = &levels[current_level];
                     match camera.mode {
                         CameraMode::TopDown => {
