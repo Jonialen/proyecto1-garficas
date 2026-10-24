@@ -27,6 +27,7 @@ impl Framebuffer {
         for row in &mut self.pixels {
             for pixel in row {
                 pixel.color = color;
+                pixel.bg = Color::Reset;
                 pixel.symbol = ' ';
             }
         }
