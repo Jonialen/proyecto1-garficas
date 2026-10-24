@@ -52,6 +52,20 @@ const BOB_FREQUENCY: f32 = 7.0;
 /// Segundos que tarda la cámara en estabilizarse al dejar de caminar.
 const BOB_SETTLE_TIME: f32 = 0.3;
 
+/// Segundos en negro con el título antes de que aparezca la escena.
+const INTRO_HOLD: f32 = 0.9;
+/// Segundos que tarda la escena en aparecer tras el título.
+const INTRO_FADE: f32 = 0.8;
+/// Segundos del fundido a negro al completar un nivel.
+const FADE_OUT_DURATION: f32 = 0.6;
+/// Ancho de la junta entre baldosas, en unidades del mundo.
+const FLOOR_GROUT: f32 = 0.04;
+const FLOOR_GROUT_COLOR: [f32; 3] = [30.0, 38.0, 30.0];
+/// Filas de texto del menú debajo del título.
+const MENU_TEXT_ROWS: usize = 17;
+/// Lado de cada glifo de la fuente de bloques.
+const FONT_SIZE: usize = 5;
+
 /// Mitad de la altura de un ítem (diamante), en unidades del mundo.
 const GEM_HALF_HEIGHT: f32 = 0.2;
 /// Relación ancho/alto en pantalla del diamante.
@@ -109,6 +123,56 @@ fn brick_texel(u: f32, v: f32, cell: (i32, i32), line_height: f32) -> [f32; 3] {
     let grain = hash2((u * 24.0) as i32 + cell.0 * 97, (v * 24.0) as i32 + cell.1 * 89);
     let tone = 0.78 + 0.3 * brick + 0.08 * (grain - 0.5);
     [WALL_COLOR[0] * tone, WALL_COLOR[1] * tone * 0.97, WALL_COLOR[2] * tone * 0.94]
+}
+
+/// Devuelve el color de la baldosa del suelo en la posición del mundo (x, y).
+/// Las juntas se desvanecen con la distancia para evitar aliasing.
+fn floor_texel(x: f32, y: f32, distance: f32) -> [f32; 3] {
+    let (tx, ty) = (x.floor() as i32, y.floor() as i32);
+    let grout = FLOOR_GROUT * (1.0 - distance / 8.0).max(0.0);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    if fx < grout || fy < grout || fx > 1.0 - grout || fy > 1.0 - grout {
+        return FLOOR_GROUT_COLOR;
+    }
+    let tile = hash2(tx * 7 + 3, ty * 11 + 5);
+    let grain = hash2((x * 20.0) as i32, (y * 20.0) as i32);
+    let checker = if (tx + ty) % 2 == 0 { 1.0 } else { 0.9 };
+    let tone = checker * (0.8 + 0.25 * tile + 0.08 * (grain - 0.5));
+    [FLOOR_COLOR[0] * tone, FLOOR_COLOR[1] * tone, FLOOR_COLOR[2] * tone]
+}
+
+/// Devuelve el glifo de 5×5 de la fuente de bloques para una letra mayúscula.
+fn font_glyph(ch: char) -> [&'static str; FONT_SIZE] {
+    match ch {
+        'L' => ["#....", "#....", "#....", "#....", "#####"],
+        'A' => [".###.", "#...#", "#####", "#...#", "#...#"],
+        'B' => ["####.", "#...#", "####.", "#...#", "####."],
+        'E' => ["#####", "#....", "####.", "#....", "#####"],
+        'R' => ["####.", "#...#", "####.", "#..#.", "#...#"],
+        'I' => ["#####", "..#..", "..#..", "..#..", "#####"],
+        'N' => ["#...#", "##..#", "#.#.#", "#..##", "#...#"],
+        'T' => ["#####", "..#..", "..#..", "..#..", "..#.."],
+        'O' => [".###.", "#...#", "#...#", "#...#", ".###."],
+        _ => [".....", ".....", ".....", ".....", "....."],
+    }
+}
+
+/// Escribe texto centrado en una fila del framebuffer, mezclando su color con el fondo según `alpha`.
+fn draw_text_centered(framebuffer: &mut Framebuffer, y: usize, text: &str, color: [f32; 3], alpha: f32) {
+    if y >= framebuffer.height { return; }
+    let len = text.chars().count();
+    let start_x = framebuffer.width.saturating_sub(len) / 2;
+    for (i, ch) in text.chars().enumerate() {
+        let x = start_x + i;
+        if x >= framebuffer.width { break; }
+        // El fondo de la celda es la mitad superior del píxel doble que ya estaba dibujado.
+        let bg = match framebuffer.pixels[y][x].color {
+            Color::Rgb { r, g, b } => [r as f32, g as f32, b as f32],
+            _ => [0.0, 0.0, 0.0],
+        };
+        let fg = lerp_color(bg, color, alpha);
+        framebuffer.set_pixel(x, y, Pixel::with_bg(to_rgb(fg), to_rgb(bg), ch));
+    }
 }
 
 /// Sombrea un diamante (octaedro) que gira sobre su eje vertical.
@@ -199,6 +263,8 @@ pub struct GameRenderer {
     walk_distance: f32, // Distancia total caminada; define la fase del balanceo de cámara.
     bob_strength: f32, // Intensidad actual del balanceo (1 = caminando, decae a 0 al detenerse).
     pickup_flash: Option<Instant>, // Momento en que se recogió el último ítem.
+    level_intro: Option<(Instant, String)>, // Inicio y título de la presentación del nivel.
+    fade_out: Option<Instant>, // Inicio del fundido a negro al completar el nivel.
 }
 
 impl GameRenderer {
@@ -248,50 +314,105 @@ impl GameRenderer {
             walk_distance: 0.0,
             bob_strength: 0.0,
             pickup_flash: None,
+            level_intro: None,
+            fade_out: None,
         }
     }
 
-    /// Muestra el menú principal del juego.
+    /// Muestra el menú principal del juego, con un título animado en letras de bloque.
+    /// Se dibuja en un framebuffer de pantalla completa (sin limpiar la terminal) para evitar parpadeos.
     pub fn show_menu(&self) {
-        let mut stdout = stdout();
-        stdout.execute(Clear(ClearType::All)).unwrap();
-
         let (cols, rows) = size().unwrap();
-        let center_x = cols / 2;
-        let start_y = rows / 4;
+        let framebuffer = self.render_menu(cols as usize, rows as usize);
+        self.display_framebuffer(&framebuffer);
+    }
 
-        // Título, controles e instrucciones.
-        stdout.execute(MoveTo(center_x.saturating_sub(15), start_y)).unwrap();
-        print!("{}", "🎮 LABERINTO DE RECOLECCIÓN 🎮".with(Color::Cyan).bold());
+    /// Dibuja el menú principal en un framebuffer del tamaño indicado.
+    pub fn render_menu(&self, width: usize, height: usize) -> Framebuffer {
+        let hi_height = height * 2;
+        let time = self.start_time.elapsed().as_secs_f32();
 
-        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 2)).unwrap();
-        print!("{}", "═══════════════════════".with(Color::DarkCyan));
-
-        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 4)).unwrap();
-        print!("{}", "⌨️  CONTROLES:".with(Color::Yellow).bold());
-
-        let controls = [
-            "WASD / ↑↓←→  - Mover jugador",
-            "Q / E        - Rotar cámara",
-            "C            - Cambiar vista",
-            "X / ESC      - Salir",
-        ];
-
-        for (i, control) in controls.iter().enumerate() {
-            stdout.execute(MoveTo(center_x.saturating_sub(15), start_y + 6 + i as u16)).unwrap();
-            print!("{}", control.with(Color::White));
+        // Fondo: degradado vertical con viñeta.
+        let mut hi_res = vec![[0.0f32; 3]; width * hi_height];
+        for y in 0..hi_height {
+            for x in 0..width {
+                let dx = (x as f32 / width as f32 - 0.5) * 2.0;
+                let dy = (y as f32 / hi_height as f32 - 0.5) * 2.0;
+                let vignette = 1.0 - 0.6 * ((dx * dx + dy * dy) / 2.0).sqrt();
+                let base = lerp_color(SKY_TOP, FOG_COLOR, y as f32 / hi_height as f32);
+                hi_res[y * width + x] = [base[0] * vignette, base[1] * vignette, base[2] * vignette];
+            }
         }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(10), start_y + 11)).unwrap();
-        print!("{}", "🎯 OBJETIVO:".with(Color::Yellow).bold());
+        // Título en letras de bloque; cada punto de la fuente ocupa `scale`×`scale` píxeles.
+        let title = "LABERINTO";
+        let glyph_cols = title.len() * (FONT_SIZE + 1) - 1;
+        let scale = if width >= glyph_cols * 2 + 4 { 2 } else { 1 };
+        let title_w = glyph_cols * scale;
+        let title_h = FONT_SIZE * scale;
+        let title_x = width.saturating_sub(title_w) / 2;
+        // Centra verticalmente el bloque completo: título + MENU_TEXT_ROWS filas de texto.
+        let content_rows = title_h / 2 + MENU_TEXT_ROWS;
+        let title_y = (height.saturating_sub(content_rows) / 2 * 2).max(2);
 
-        stdout.execute(MoveTo(center_x.saturating_sub(22), start_y + 12)).unwrap();
-        print!("{}", "Recolecta ◆ y llega a la meta 🟥 en 3 niveles".with(Color::White));
+        for (i, ch) in title.chars().enumerate() {
+            let glyph = font_glyph(ch);
+            for (gy, line) in glyph.iter().enumerate() {
+                for (gx, cell) in line.chars().enumerate() {
+                    if cell != '#' { continue; }
+                    for sy in 0..scale {
+                        for sx in 0..scale {
+                            let x = title_x + (i * (FONT_SIZE + 1) + gx) * scale + sx;
+                            let y = title_y + gy * scale + sy;
+                            // Sombra desplazada y luego el relleno con brillo que recorre el título.
+                            if x + 1 < width && y + 1 < hi_height {
+                                hi_res[(y + 1) * width + x + 1] = [10.0, 6.0, 4.0];
+                            }
+                            if x < width && y < hi_height {
+                                let v = (y - title_y) as f32 / title_h as f32;
+                                let shine = ((x as f32 * 0.08 - time * 3.0).sin() * 0.5 + 0.5).powf(6.0);
+                                let base = lerp_color([255.0, 214.0, 90.0], [200.0, 90.0, 30.0], v);
+                                hi_res[y * width + x] = lerp_color(base, [255.0, 250.0, 230.0], shine * 0.8);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        stdout.execute(MoveTo(center_x.saturating_sub(15), start_y + 15)).unwrap();
-        print!("{}", "Presiona ENTER para jugar".with(Color::Green).bold());
+        let mut framebuffer = Framebuffer::new(width, height);
+        for y in 0..height {
+            for x in 0..width {
+                let top = to_rgb(hi_res[(2 * y) * width + x]);
+                let bottom = to_rgb(hi_res[(2 * y + 1) * width + x]);
+                framebuffer.set_pixel(x, y, Pixel::with_bg(top, bottom, '▀'));
+            }
+        }
 
-        stdout.flush().unwrap();
+        let text_y = (title_y + title_h) / 2 + 2;
+        let white = [225.0, 225.0, 235.0];
+        let dim = [150.0, 150.0, 170.0];
+        let gold = [255.0, 200.0, 70.0];
+        draw_text_centered(&mut framebuffer, text_y, "D E   R E C O L E C C I Ó N", [235.0, 150.0, 70.0], 1.0);
+        draw_text_centered(&mut framebuffer, text_y + 2, "◆ ─────────────────────── ◆", gold, 0.7);
+        draw_text_centered(&mut framebuffer, text_y + 4, "CONTROLES", gold, 1.0);
+        let controls = [
+            ("WASD / ↑↓←→", "Mover"),
+            ("Q / E", "Rotar"),
+            ("C", "Cambiar vista"),
+            ("X / ESC", "Salir"),
+        ];
+        for (i, (keys, action)) in controls.iter().enumerate() {
+            // Columnas de ancho fijo para que todas las filas queden alineadas al centrarlas.
+            let line = format!("{:<14}{:<13}", keys, action);
+            draw_text_centered(&mut framebuffer, text_y + 6 + i, &line, white, 1.0);
+        }
+        draw_text_centered(&mut framebuffer, text_y + 11, "Recolecta ◆ y llega a la meta ● en 3 niveles", dim, 1.0);
+
+        let pulse = 0.55 + 0.45 * (time * 3.0).sin();
+        draw_text_centered(&mut framebuffer, text_y + 14, "▶  Presiona ENTER para jugar  ◀", [120.0, 255.0, 150.0], pulse);
+
+        framebuffer
     }
 
     /// Muestra la pantalla de victoria cuando se completan todos los niveles.
@@ -432,6 +553,47 @@ impl GameRenderer {
         self.render_vision_rays(framebuffer, player, map);
     }
 
+    /// Inicia la presentación del nivel: pantalla negra con el título y luego aparición gradual.
+    pub fn start_level_intro(&mut self, title: &str) {
+        self.level_intro = Some((Instant::now(), title.to_string()));
+    }
+
+    /// Inicia el fundido a negro al completar un nivel.
+    pub fn start_fade_out(&mut self) {
+        self.fade_out = Some(Instant::now());
+    }
+
+    /// Indica si el fundido a negro ya terminó.
+    pub fn fade_out_finished(&self) -> bool {
+        self.fade_out.is_some_and(|start| start.elapsed().as_secs_f32() >= FADE_OUT_DURATION)
+    }
+
+    /// Devuelve cuánto oscurecer la escena (0 = normal, 1 = negro) según las transiciones activas.
+    fn transition_darkness(&self) -> f32 {
+        let intro = self.level_intro.as_ref().map_or(0.0, |(start, _)| {
+            let t = start.elapsed().as_secs_f32();
+            1.0 - ((t - INTRO_HOLD) / INTRO_FADE).clamp(0.0, 1.0)
+        });
+        let outro = self.fade_out.map_or(0.0, |start| (start.elapsed().as_secs_f32() / FADE_OUT_DURATION).min(1.0));
+        intro.max(outro)
+    }
+
+    /// Dibuja el título del nivel centrado durante la presentación, con aparición y desvanecimiento.
+    fn render_level_title(&self, framebuffer: &mut Framebuffer) {
+        let Some((start, title)) = &self.level_intro else { return };
+        let t = start.elapsed().as_secs_f32();
+        let fade_in = (t / 0.3).min(1.0);
+        let fade_out = 1.0 - ((t - INTRO_HOLD - INTRO_FADE * 0.3) / (INTRO_FADE * 0.5)).clamp(0.0, 1.0);
+        let alpha = fade_in.min(fade_out);
+        if alpha <= 0.0 { return; }
+
+        let center_y = framebuffer.height / 2;
+        let rule = "◆ ───────────── ◆";
+        draw_text_centered(framebuffer, center_y.saturating_sub(2), rule, FLASH_COLOR, alpha * 0.8);
+        draw_text_centered(framebuffer, center_y, title, [255.0, 240.0, 200.0], alpha);
+        draw_text_centered(framebuffer, center_y + 2, rule, FLASH_COLOR, alpha * 0.8);
+    }
+
     /// Dispara el destello de pantalla y el resaltado del contador al recoger un ítem.
     pub fn trigger_pickup_flash(&mut self) {
         self.pickup_flash = Some(Instant::now());
@@ -486,23 +648,34 @@ impl GameRenderer {
         let horizon = hi_height as f32 / 2.0 + self.update_head_bob(player, hi_height);
         let mut hi_res = vec![[0.0f32; 3]; width * hi_height];
 
-        // Cielo y suelo: el cielo se funde con la niebla en el horizonte y el suelo
-        // se oscurece con la misma niebla según la distancia de cada fila.
-        for y in 0..hi_height {
-            let row_center = y as f32 + 0.5;
-            let color = if row_center < horizon {
-                let t = row_center / horizon;
-                lerp_color(SKY_TOP, FOG_COLOR, t * t)
-            } else {
-                let row_distance = hi_height as f32 / (2.0 * (row_center - horizon));
-                apply_fog(FLOOR_COLOR, row_distance)
-            };
-            hi_res[y * width..(y + 1) * width].fill(color);
-        }
-
         // Lanzamiento de rayos (Raycasting) para renderizar las paredes.
         let ray_angle_step = player.fov / width as f32;
         let start_angle = -player.fov / 2.0;
+
+        // Cielo y suelo: el cielo se funde con la niebla en el horizonte; el suelo se proyecta
+        // (floor casting) para texturizarlo con baldosas y se oscurece con la misma niebla.
+        let rays: Vec<(Vec2, f32)> = (0..width)
+            .map(|i| {
+                let angle = start_angle + i as f32 * ray_angle_step;
+                (player.direction.rotate(angle), angle.cos())
+            })
+            .collect();
+        for y in 0..hi_height {
+            let row_center = y as f32 + 0.5;
+            let row = &mut hi_res[y * width..(y + 1) * width];
+            if row_center < horizon {
+                let t = row_center / horizon;
+                row.fill(lerp_color(SKY_TOP, FOG_COLOR, t * t));
+                continue;
+            }
+            let row_distance = hi_height as f32 / (2.0 * (row_center - horizon));
+            for (x, (ray_dir, cos)) in rays.iter().enumerate() {
+                let along_ray = row_distance / cos;
+                let wx = player.position.x + ray_dir.x * along_ray;
+                let wy = player.position.y + ray_dir.y * along_ray;
+                row[x] = apply_fog(floor_texel(wx, wy, row_distance), row_distance);
+            }
+        }
         let mut z_buffer = vec![f32::MAX; width];
 
         for i in 0..width {
@@ -534,6 +707,13 @@ impl GameRenderer {
 
         self.render_minimap(&mut hi_res, width, hi_height, player, map);
 
+        let darkness = self.transition_darkness();
+        if darkness > 0.0 {
+            for pixel in hi_res.iter_mut() {
+                *pixel = lerp_color(*pixel, [0.0, 0.0, 0.0], darkness);
+            }
+        }
+
         // Combina cada par de píxeles verticales en una sola celda de la terminal.
         for y in 0..framebuffer.height {
             for x in 0..width {
@@ -542,6 +722,8 @@ impl GameRenderer {
                 framebuffer.set_pixel(x, y, Pixel::with_bg(top, bottom, '▀'));
             }
         }
+
+        self.render_level_title(framebuffer);
     }
 
     /// Renderiza los objetos del mapa (ítems y meta) como sprites 3D, de atrás hacia adelante,

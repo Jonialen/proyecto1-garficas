@@ -114,6 +114,7 @@ fn main() {
     let target_frame_time = Duration::from_millis(16);
     let mut running = true;
     let mut first_render = true;
+    let mut level_complete = false;
 
     let mut renderer = GameRenderer::new(
         cols,
@@ -184,6 +185,8 @@ fn main() {
                                     levels[current_level].get_height() * renderer.get_cell_height(),
                                 );
                                 
+                                renderer.start_level_intro(&levels[current_level].name);
+                                level_complete = false;
                                 game_state = GameState::Playing;
                                 first_render = true;
                             },
@@ -205,8 +208,13 @@ fn main() {
                     player.has_moved = true; // Forzar re-render
                 }
 
-                // Verificar victoria del nivel
-                if player.is_at_goal(&level.map) && collected_items >= level.required_items {
+                // Verificar victoria del nivel: primero se funde a negro y luego se cambia de nivel.
+                if !level_complete && player.is_at_goal(&level.map) && collected_items >= level.required_items {
+                    level_complete = true;
+                    renderer.start_fade_out();
+                }
+                if level_complete && renderer.fade_out_finished() {
+                    level_complete = false;
                     if current_level < levels.len() - 1 {
                         // Siguiente nivel
                         current_level += 1;
@@ -223,6 +231,7 @@ fn main() {
                             levels[current_level].get_width() * renderer.get_cell_width(),
                             levels[current_level].get_height() * renderer.get_cell_height(),
                         );
+                        renderer.start_level_intro(&levels[current_level].name);
                         
                         first_render = true;
                     } else {
@@ -274,6 +283,12 @@ fn main() {
 
                 if poll(Duration::from_millis(1)).unwrap() {
                     if let Ok(Event::Key(KeyEvent { code, .. })) = read() {
+                        // Durante el fundido de fin de nivel solo se permite salir.
+                        let code = if level_complete && !matches!(code, KeyCode::Char('x') | KeyCode::Esc) {
+                            KeyCode::Null
+                        } else {
+                            code
+                        };
                         match code {
                             KeyCode::Char('w') | KeyCode::Up => 
                                 player.move_forward(0.15, &levels[current_level].map),
