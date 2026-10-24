@@ -9,7 +9,7 @@ use std::collections::{HashSet};
 use std::io::{BufWriter, Write, stdout};
 use std::time::Instant;
 
-use crate::game::{Entity, Player, Level};
+use crate::game::{Enemy, EnemyState, Entity, Player, Level};
 use crate::graphics::{Framebuffer, Pixel};
 use crate::math::Vec2;
 
@@ -71,6 +71,68 @@ const SPARKLE_COUNT: usize = 70;
 const SPARKLE_MAX_BACKGROUND: f32 = 60.0;
 /// Lado de cada glifo de la fuente de bloques.
 const FONT_SIZE: usize = 5;
+
+/// Duración del destello rojo al recibir un golpe, en segundos.
+const DAMAGE_FLASH_DURATION: f32 = 0.5;
+/// Opacidad máxima del destello de daño en los bordes de la pantalla.
+const DAMAGE_FLASH_STRENGTH: f32 = 0.7;
+const DAMAGE_FLASH_COLOR: [f32; 3] = [200.0, 20.0, 30.0];
+/// Mitad de la altura de un fantasma, en unidades del mundo.
+const GHOST_HALF_HEIGHT: f32 = 0.3;
+/// Relación ancho/alto en pantalla del fantasma.
+const GHOST_ASPECT: f32 = 0.75;
+/// Opacidad del cuerpo del fantasma.
+const GHOST_ALPHA: f32 = 0.85;
+const GHOST_COLOR: [f32; 3] = [125.0, 70.0, 185.0];
+const GHOST_CHASE_COLOR: [f32; 3] = [175.0, 55.0, 95.0];
+const GHOST_EYES: [f32; 3] = [190.0, 245.0, 255.0];
+const GHOST_EYES_CHASE: [f32; 3] = [255.0, 50.0, 50.0];
+const MINIMAP_ENEMY: [f32; 3] = [200.0, 70.0, 255.0];
+
+/// Tipo de sprite que se dibuja en la vista en primera persona.
+#[derive(Clone, Copy)]
+enum SpriteKind {
+    /// Ítem recolectable.
+    Gem,
+    /// Meta del nivel.
+    Orb,
+    /// Enemigo; `true` si está persiguiendo al jugador.
+    Ghost(bool),
+}
+
+/// Intensidad de un destello que empezó en `start`: 1 al inicio y 0 tras `duration` segundos.
+fn flash_intensity(start: Option<Instant>, duration: f32) -> f32 {
+    start.map_or(0.0, |start| {
+        let t = start.elapsed().as_secs_f32() / duration;
+        if t >= 1.0 { 0.0 } else { (1.0 - t) * (1.0 - t) }
+    })
+}
+
+/// Sombrea un fantasma: cabeza esférica, cuerpo cilíndrico con borde inferior ondulante y
+/// ojos brillantes. Devuelve (color, opacidad, brilla) o `None` si el píxel no toca al fantasma.
+fn shade_ghost(u: f32, v: f32, time: f32, chasing: bool) -> Option<([f32; 3], f32, bool)> {
+    if u.abs() > 1.0 { return None; }
+
+    for eye_x in [-0.38, 0.38] {
+        let dx = (u - eye_x) / 0.17;
+        let dy = (v - 0.2) / 0.24;
+        if dx * dx + dy * dy < 1.0 {
+            return Some((if chasing { GHOST_EYES_CHASE } else { GHOST_EYES }, 1.0, true));
+        }
+    }
+
+    let normal = if v >= 0.0 {
+        let d2 = u * u + v * v;
+        if d2 > 1.0 { return None; }
+        [u, v, -(1.0 - d2).sqrt()]
+    } else {
+        let hem = -1.0 + 0.18 * ((u * 9.0 + time * 7.0).sin() + 1.0);
+        if v < hem { return None; }
+        [u, 0.0, -(1.0 - u * u).sqrt()]
+    };
+    let base = if chasing { GHOST_CHASE_COLOR } else { GHOST_COLOR };
+    Some((lit_surface(base, normal, 0.35, 16.0), GHOST_ALPHA, false))
+}
 
 /// Mitad de la altura de un ítem (diamante), en unidades del mundo.
 const GEM_HALF_HEIGHT: f32 = 0.2;
@@ -272,6 +334,7 @@ pub struct GameRenderer {
     walk_distance: f32, // Distancia total caminada; define la fase del balanceo de cámara.
     bob_strength: f32, // Intensidad actual del balanceo (1 = caminando, decae a 0 al detenerse).
     pickup_flash: Option<Instant>, // Momento en que se recogió el último ítem.
+    damage_flash: Option<Instant>, // Momento en que el jugador recibió el último golpe.
     level_intro: Option<(Instant, String)>, // Inicio y título de la presentación del nivel.
     fade_out: Option<Instant>, // Inicio del fundido a negro al completar el nivel.
 }
@@ -323,6 +386,7 @@ impl GameRenderer {
             walk_distance: 0.0,
             bob_strength: 0.0,
             pickup_flash: None,
+            damage_flash: None,
             level_intro: None,
             fade_out: None,
         }
@@ -642,12 +706,19 @@ impl GameRenderer {
         self.pickup_flash = Some(Instant::now());
     }
 
+    /// Dispara el destello rojo al recibir un golpe.
+    pub fn trigger_damage_flash(&mut self) {
+        self.damage_flash = Some(Instant::now());
+    }
+
     /// Devuelve la intensidad actual del destello de recolección, de 1 (recién recogido) a 0.
     fn pickup_flash_intensity(&self) -> f32 {
-        self.pickup_flash.map_or(0.0, |start| {
-            let t = start.elapsed().as_secs_f32() / FLASH_DURATION;
-            if t >= 1.0 { 0.0 } else { (1.0 - t) * (1.0 - t) }
-        })
+        flash_intensity(self.pickup_flash, FLASH_DURATION)
+    }
+
+    /// Devuelve la intensidad actual del destello de daño, de 1 (recién golpeado) a 0.
+    fn damage_flash_intensity(&self) -> f32 {
+        flash_intensity(self.damage_flash, DAMAGE_FLASH_DURATION)
     }
 
     /// Actualiza el balanceo de cámara según cuánto se movió el jugador desde el último cuadro
@@ -678,6 +749,7 @@ impl GameRenderer {
         framebuffer: &mut Framebuffer,
         player: &Player,
         map: &[Vec<u8>],
+        enemies: &[Enemy],
     ) {
         let (px, py) = player.get_grid_position();
         if map[py][px] == 5 {
@@ -745,10 +817,10 @@ impl GameRenderer {
             }
         }
 
-        self.render_sprites(&mut hi_res, &z_buffer, width, hi_height, horizon, player, map);
-        self.render_pickup_flash(&mut hi_res, width, hi_height);
+        self.render_sprites(&mut hi_res, &z_buffer, width, hi_height, horizon, player, map, enemies);
+        self.render_flashes(&mut hi_res, width, hi_height);
 
-        self.render_minimap(&mut hi_res, width, hi_height, player, map);
+        self.render_minimap(&mut hi_res, width, hi_height, player, map, enemies);
 
         let darkness = self.transition_darkness();
         if darkness > 0.0 {
@@ -772,35 +844,51 @@ impl GameRenderer {
     /// Renderiza los objetos del mapa (ítems y meta) como sprites 3D, de atrás hacia adelante,
     /// respetando el z-buffer de las paredes.
     #[allow(clippy::too_many_arguments)]
-    fn render_sprites(&self, buf: &mut [[f32; 3]], z_buffer: &[f32], width: usize, height: usize, horizon: f32, player: &Player, map: &[Vec<u8>]) {
+    fn render_sprites(&self, buf: &mut [[f32; 3]], z_buffer: &[f32], width: usize, height: usize, horizon: f32, player: &Player, map: &[Vec<u8>], enemies: &[Enemy]) {
         let time = self.start_time.elapsed().as_secs_f32();
         let dir = player.direction.normalize();
         let angle_step = player.fov / width as f32;
 
-        let mut sprites: Vec<(f32, f32, usize, usize, u8)> = Vec::new();
+        // Objetos del mapa y enemigos: (posición, tipo, fase de animación).
+        let mut objects: Vec<(Vec2, SpriteKind, f32)> = Vec::new();
         for (cy, row) in map.iter().enumerate() {
             for (cx, &cell) in row.iter().enumerate() {
-                if cell != 5 && cell != 3 { continue; }
-                let rel = Vec2::new(cx as f32 + 0.5 - player.position.x, cy as f32 + 0.5 - player.position.y);
-                let depth = dir.x * rel.x + dir.y * rel.y;
-                if depth < 0.2 { continue; }
-                let angle = (dir.x * rel.y - dir.y * rel.x).atan2(depth);
-                sprites.push((depth, angle, cx, cy, cell));
+                let kind = match cell {
+                    5 => SpriteKind::Gem,
+                    3 => SpriteKind::Orb,
+                    _ => continue,
+                };
+                let phase = hash2(cx as i32, cy as i32) * std::f32::consts::TAU;
+                objects.push((Vec2::new(cx as f32 + 0.5, cy as f32 + 0.5), kind, phase));
             }
         }
+        for (i, enemy) in enemies.iter().enumerate() {
+            let phase = hash2(i as i32, 99) * std::f32::consts::TAU;
+            objects.push((enemy.position, SpriteKind::Ghost(enemy.state == EnemyState::Chase), phase));
+        }
+
+        let mut sprites: Vec<(f32, f32, SpriteKind, f32)> = objects
+            .into_iter()
+            .filter_map(|(pos, kind, phase)| {
+                let rel = Vec2::new(pos.x - player.position.x, pos.y - player.position.y);
+                let depth = dir.x * rel.x + dir.y * rel.y;
+                if depth < 0.2 { return None; }
+                let angle = (dir.x * rel.y - dir.y * rel.x).atan2(depth);
+                Some((depth, angle, kind, phase))
+            })
+            .collect();
         sprites.sort_by(|a, b| b.0.total_cmp(&a.0));
 
-        for (depth, angle, cx, cy, cell) in sprites {
+        for (depth, angle, kind, phase) in sprites {
             let center_col = (angle + player.fov / 2.0) / angle_step;
-            let phase = hash2(cx as i32, cy as i32) * std::f32::consts::TAU;
             let scale = height as f32 / depth;
             let fog = 1.0 - (-FOG_DENSITY * depth).exp();
 
             // Altura sobre el suelo (0..1), radio vertical y proporción horizontal en pantalla.
-            let (elevation, half_h, aspect) = if cell == 5 {
-                (0.42 + 0.05 * (time * 2.2 + phase).sin(), GEM_HALF_HEIGHT * scale, GEM_ASPECT)
-            } else {
-                (0.45 + 0.03 * (time * 1.3).sin(), ORB_RADIUS * scale, 1.0)
+            let (elevation, half_h, aspect) = match kind {
+                SpriteKind::Gem => (0.42 + 0.05 * (time * 2.2 + phase).sin(), GEM_HALF_HEIGHT * scale, GEM_ASPECT),
+                SpriteKind::Orb => (0.45 + 0.03 * (time * 1.3).sin(), ORB_RADIUS * scale, 1.0),
+                SpriteKind::Ghost(_) => (0.4 + 0.04 * (time * 3.0 + phase).sin(), GHOST_HALF_HEIGHT * scale, GHOST_ASPECT),
             };
             let half_w = half_h * aspect;
             let center_y = horizon + (0.5 - elevation) * scale;
@@ -833,39 +921,57 @@ impl GameRenderer {
                 let u = (x as f32 + 0.5 - center_col) / half_w;
                 for y in row_start..row_end {
                     let v = (center_y - (y as f32 + 0.5)) / half_h;
-                    let shaded = if cell == 5 {
-                        shade_gem(u, v, time * 1.6 + phase)
-                    } else {
-                        shade_orb(u, v, time)
-                    };
-                    if let Some(color) = shaded {
-                        buf[y * width + x] = apply_fog(color, depth);
+                    let idx = y * width + x;
+                    match kind {
+                        SpriteKind::Gem => {
+                            if let Some(color) = shade_gem(u, v, time * 1.6 + phase) {
+                                buf[idx] = apply_fog(color, depth);
+                            }
+                        }
+                        SpriteKind::Orb => {
+                            if let Some(color) = shade_orb(u, v, time) {
+                                buf[idx] = apply_fog(color, depth);
+                            }
+                        }
+                        SpriteKind::Ghost(chasing) => {
+                            if let Some((color, alpha, glowing)) = shade_ghost(u, v, time + phase, chasing) {
+                                // Los ojos brillan: la niebla los afecta mucho menos que al cuerpo.
+                                let fog_depth = if glowing { depth * 0.3 } else { depth };
+                                buf[idx] = lerp_color(buf[idx], apply_fog(color, fog_depth), alpha);
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
-    /// Tiñe la escena de dorado tras recoger un ítem, con más intensidad en los bordes.
-    fn render_pickup_flash(&self, buf: &mut [[f32; 3]], width: usize, height: usize) {
-        let intensity = self.pickup_flash_intensity();
-        if intensity <= 0.0 { return; }
-
-        let (cx, cy) = (width as f32 / 2.0, height as f32 / 2.0);
-        for y in 0..height {
-            for x in 0..width {
-                let dx = (x as f32 - cx) / cx;
-                let dy = (y as f32 - cy) / cy;
-                let edge = ((dx * dx + dy * dy) / 2.0).sqrt();
-                let idx = y * width + x;
-                buf[idx] = lerp_color(buf[idx], FLASH_COLOR, intensity * FLASH_STRENGTH * (0.35 + 0.65 * edge));
+    /// Tiñe la escena tras recoger un ítem (dorado) o recibir un golpe (rojo),
+    /// con más intensidad en los bordes de la pantalla.
+    fn render_flashes(&self, buf: &mut [[f32; 3]], width: usize, height: usize) {
+        let flashes = [
+            (self.pickup_flash_intensity() * FLASH_STRENGTH, FLASH_COLOR),
+            (self.damage_flash_intensity() * DAMAGE_FLASH_STRENGTH, DAMAGE_FLASH_COLOR),
+        ];
+        for (strength, color) in flashes {
+            if strength <= 0.0 { continue; }
+            let (cx, cy) = (width as f32 / 2.0, height as f32 / 2.0);
+            for y in 0..height {
+                for x in 0..width {
+                    let dx = (x as f32 - cx) / cx;
+                    let dy = (y as f32 - cy) / cy;
+                    let edge = ((dx * dx + dy * dy) / 2.0).sqrt();
+                    let idx = y * width + x;
+                    buf[idx] = lerp_color(buf[idx], color, strength * (0.35 + 0.65 * edge));
+                }
             }
         }
     }
 
     /// Renderiza el minimapa sobre el búfer de doble resolución, centrado en el jugador.
     /// Cada celda del mapa ocupa `MINIMAP_SCALE`×`MINIMAP_SCALE` píxeles cuadrados.
-    fn render_minimap(&self, buf: &mut [[f32; 3]], width: usize, height: usize, player: &Player, map: &[Vec<u8>]) {
+    #[allow(clippy::too_many_arguments)]
+    fn render_minimap(&self, buf: &mut [[f32; 3]], width: usize, height: usize, player: &Player, map: &[Vec<u8>], enemies: &[Enemy]) {
         let scale = MINIMAP_SCALE;
         let inner = self.minimap_size * scale;
         let total = inner + 2;
@@ -923,6 +1029,13 @@ impl GameRenderer {
 
         for step in 1..=scale * 2 {
             plot(center_x + player.direction.x * step as f32, center_y + player.direction.y * step as f32, MINIMAP_DIRECTION);
+        }
+        for enemy in enemies {
+            let ex = center_x + (enemy.position.x - player.position.x) * scale as f32;
+            let ey = center_y + (enemy.position.y - player.position.y) * scale as f32;
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 0.0)] {
+                plot(ex + dx, ey + dy, MINIMAP_ENEMY);
+            }
         }
         for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (-1.0, 0.0), (0.0, 0.0)] {
             plot(center_x + dx, center_y + dy, MINIMAP_PLAYER);
@@ -1056,6 +1169,8 @@ impl GameRenderer {
         level: usize,
         total_levels: usize,
         level_name: &str,
+        lives: u32,
+        max_lives: u32,
     ) {
         let mut stdout = stdout();
         let (_, rows) = size().unwrap();
@@ -1064,7 +1179,14 @@ impl GameRenderer {
         print!("{}", format!("[WASD:move | QE:rotate | C:camera | M:mute | X:quit] FPS: {:.0}", fps).with(Color::White));
         
         stdout.execute(MoveTo(0, rows.saturating_sub(2))).unwrap();
-        print!("{}", format!("Nivel {}/{}: {} | ", level, total_levels, level_name).with(Color::Yellow));
+        let hearts: String = (0..max_lives).map(|i| if i < lives { "♥ " } else { "♡ " }).collect();
+        let heart_color = Color::Rgb { r: 235, g: 60, b: 70 };
+        if self.damage_flash_intensity() > 0.0 {
+            print!("{}", hearts.with(Color::Rgb { r: 255, g: 170, b: 170 }).bold());
+        } else {
+            print!("{}", hearts.with(heart_color));
+        }
+        print!("{}", format!("| Nivel {}/{}: {} | ", level, total_levels, level_name).with(Color::Yellow));
         let items = format!("Items: {}/{} ◆", collected, required);
         if self.pickup_flash_intensity() > 0.0 {
             print!("{}", items.with(Color::Rgb { r: 255, g: 240, b: 160 }).bold());

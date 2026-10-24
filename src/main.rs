@@ -7,9 +7,40 @@ use crossterm::{
 use std::time::{Duration, Instant};
 
 use raytracer_maze::{
-    Audio, Camera, CameraMode, Framebuffer, GameRenderer,
-    GameState, Player, Level, Sfx,
+    Audio, Camera, CameraMode, Enemy, Framebuffer, GameRenderer,
+    GameState, Player, Level, Sfx, Vec2, ENEMY_HIT_RADIUS,
 };
+
+/// Vidas con las que empieza cada nivel.
+const MAX_LIVES: u32 = 3;
+/// Segundos de invulnerabilidad tras recibir un golpe.
+const HIT_INVULNERABILITY: f32 = 1.5;
+/// Segundos de invulnerabilidad al empezar un nivel, mientras dura la presentación.
+const START_INVULNERABILITY: f32 = 2.0;
+/// Distancia a la que un golpe empuja al jugador lejos del enemigo.
+const KNOCKBACK: f32 = 0.5;
+
+/// Prepara todo lo que se reinicia al empezar un nivel: jugador, enemigos, renderizador y
+/// framebuffer cenital. Muestra `title` en la presentación del nivel.
+fn start_level(level: &Level, title: &str, cols: usize, rows: usize) -> (Player, Vec<Enemy>, GameRenderer, Framebuffer) {
+    let mut player = Player::from_map(&level.map);
+    player.invulnerable = START_INVULNERABILITY;
+    let enemies = level
+        .enemy_spawns
+        .iter()
+        .enumerate()
+        .map(|(i, &(x, y))| Enemy::new(x, y, i as u32 + 1))
+        .collect();
+
+    let mut renderer = GameRenderer::new(cols, rows, level.get_width(), level.get_height());
+    let fb_topdown = Framebuffer::new(
+        level.get_width() * renderer.get_cell_width(),
+        level.get_height() * renderer.get_cell_height(),
+    );
+    renderer.start_level_intro(title);
+    renderer.clear_screen();
+    (player, enemies, renderer, fb_topdown)
+}
 
 struct FpsCounter {
     frame_count: u32,
@@ -47,7 +78,7 @@ fn create_levels() -> Vec<Level> {
         Level::new(
             vec![
                 vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                vec![1, 2, 0, 0, 5, 1, 0, 0, 0, 1],
+                vec![1, 2, 0, 0, 5, 1, 0, 4, 0, 1],
                 vec![1, 0, 1, 0, 0, 0, 0, 1, 0, 1],
                 vec![1, 0, 0, 5, 0, 1, 0, 0, 0, 1],
                 vec![1, 0, 1, 0, 0, 0, 5, 0, 0, 1],
@@ -63,9 +94,9 @@ fn create_levels() -> Vec<Level> {
                 vec![1, 2, 0, 0, 5, 1, 0, 5, 0, 0, 0, 1],
                 vec![1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1],
                 vec![1, 5, 1, 0, 0, 0, 0, 0, 1, 0, 1, 1],
-                vec![1, 0, 0, 0, 1, 1, 1, 0, 0, 5, 0, 1],
+                vec![1, 0, 0, 0, 1, 1, 1, 0, 0, 5, 4, 1],
                 vec![1, 1, 1, 0, 1, 0, 0, 0, 1, 1, 0, 1],
-                vec![1, 0, 0, 5, 0, 0, 1, 0, 0, 0, 0, 1],
+                vec![1, 0, 0, 5, 0, 0, 1, 4, 0, 0, 0, 1],
                 vec![1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 3, 1],
                 vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ],
@@ -77,12 +108,12 @@ fn create_levels() -> Vec<Level> {
                 vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
                 vec![1, 2, 0, 0, 5, 0, 0, 1, 0, 5, 0, 0, 0, 1],
                 vec![1, 0, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1],
-                vec![1, 5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1],
+                vec![1, 5, 0, 0, 0, 1, 0, 0, 0, 0, 4, 0, 0, 1],
                 vec![1, 0, 1, 0, 0, 0, 0, 1, 1, 1, 0, 1, 5, 1],
-                vec![1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 1],
+                vec![1, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 4, 1],
                 vec![1, 5, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 5, 1],
                 vec![1, 1, 1, 1, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1],
-                vec![1, 0, 0, 5, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1],
+                vec![1, 0, 0, 5, 0, 1, 4, 0, 1, 0, 0, 0, 0, 1],
                 vec![1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 3, 1],
                 vec![1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ],
@@ -116,8 +147,10 @@ fn main() {
 
     let target_frame_time = Duration::from_millis(16);
     let mut running = true;
-    let mut first_render = true;
     let mut level_complete = false;
+    let mut enemies: Vec<Enemy> = Vec::new();
+    let mut lives = MAX_LIVES;
+    let mut last_update = Instant::now();
 
     let mut renderer = GameRenderer::new(
         cols,
@@ -178,24 +211,12 @@ fn main() {
                                 levels = create_levels(); // Recrear todos los niveles
                                 current_level = selected_level;
                                 collected_items = 0;
-                                player = Player::from_map(&levels[current_level].map);
-                                
-                                renderer = GameRenderer::new(
-                                    cols,
-                                    rows,
-                                    levels[current_level].get_width(),
-                                    levels[current_level].get_height(),
-                                );
-                                fb_topdown = Framebuffer::new(
-                                    levels[current_level].get_width() * renderer.get_cell_width(),
-                                    levels[current_level].get_height() * renderer.get_cell_height(),
-                                );
-                                
-                                renderer.start_level_intro(&levels[current_level].name);
-                                renderer.clear_screen();
+                                lives = MAX_LIVES;
+                                let level = &levels[current_level];
+                                (player, enemies, renderer, fb_topdown) = start_level(level, &level.name, cols, rows);
                                 level_complete = false;
+                                last_update = Instant::now();
                                 game_state = GameState::Playing;
-                                first_render = true;
                             },
                             KeyCode::Esc => game_state = GameState::Menu,
                             _ => {}
@@ -205,8 +226,42 @@ fn main() {
             }
 
             GameState::Playing => {
+                let dt = last_update.elapsed().as_secs_f32().min(0.1);
+                last_update = Instant::now();
+
+                // Enemigos: se quedan quietos durante el fundido de fin de nivel.
+                player.invulnerable = (player.invulnerable - dt).max(0.0);
+                if !level_complete {
+                    for enemy in &mut enemies {
+                        enemy.update(dt, player.position, &levels[current_level].map);
+                    }
+
+                    let hit = enemies.iter().find(|e| {
+                        Vec2::new(e.position.x - player.position.x, e.position.y - player.position.y).length() < ENEMY_HIT_RADIUS
+                    });
+                    if let (Some(enemy), true) = (hit, player.invulnerable <= 0.0) {
+                        lives -= 1;
+                        if lives == 0 {
+                            // Sin vidas: el nivel se reinicia desde cero, con sus ítems.
+                            if let Some(audio) = &audio { audio.play(Sfx::GameOver); }
+                            levels[current_level] = create_levels().swap_remove(current_level);
+                            collected_items = 0;
+                            lives = MAX_LIVES;
+                            let level = &levels[current_level];
+                            let title = format!("Sin vidas · {}", level.name);
+                            (player, enemies, renderer, fb_topdown) = start_level(level, &title, cols, rows);
+                        } else {
+                            if let Some(audio) = &audio { audio.play(Sfx::Hurt); }
+                            renderer.trigger_damage_flash();
+                            player.invulnerable = HIT_INVULNERABILITY;
+                            let away = Vec2::new(player.position.x - enemy.position.x, player.position.y - enemy.position.y).normalize();
+                            player.push(Vec2::new(away.x * KNOCKBACK, away.y * KNOCKBACK), &levels[current_level].map);
+                        }
+                    }
+                }
+
                 let level = &mut levels[current_level];
-                
+
                 // Verificar si el jugador está en un item y recogerlo
                 let (px, py) = player.get_grid_position();
                 if level.collect_item(px, py) {
@@ -228,22 +283,9 @@ fn main() {
                         // Siguiente nivel
                         current_level += 1;
                         collected_items = 0;
-                        player = Player::from_map(&levels[current_level].map);
-                        
-                        renderer = GameRenderer::new(
-                            cols,
-                            rows,
-                            levels[current_level].get_width(),
-                            levels[current_level].get_height(),
-                        );
-                        fb_topdown = Framebuffer::new(
-                            levels[current_level].get_width() * renderer.get_cell_width(),
-                            levels[current_level].get_height() * renderer.get_cell_height(),
-                        );
-                        renderer.start_level_intro(&levels[current_level].name);
-                        renderer.clear_screen();
-                        
-                        first_render = true;
+                        lives = MAX_LIVES;
+                        let level = &levels[current_level];
+                        (player, enemies, renderer, fb_topdown) = start_level(level, &level.name, cols, rows);
                     } else {
                         // Juego completado
                         game_state = GameState::Victory;
@@ -251,8 +293,8 @@ fn main() {
                     }
                 }
 
-                // La vista en primera persona tiene animaciones, así que se redibuja en cada cuadro.
-                if player.has_moved || first_render || camera.mode == CameraMode::FirstPerson {
+                // Hay animaciones y enemigos en movimiento, así que se redibuja en cada cuadro.
+                {
                     let level_ref = &levels[current_level];
                     match camera.mode {
                         CameraMode::TopDown => {
@@ -269,6 +311,7 @@ fn main() {
                                 &mut fb_firstperson,
                                 &player,
                                 &level_ref.map,
+                                &enemies,
                             );
                             renderer.display_framebuffer(&fb_firstperson);
                         }
@@ -283,10 +326,11 @@ fn main() {
                         current_level + 1,
                         levels.len(),
                         &level_ref.name,
+                        lives,
+                        MAX_LIVES,
                     );
 
                     player.has_moved = false;
-                    first_render = false;
                 }
 
                 fps_counter.update();

@@ -10,6 +10,8 @@ pub struct Player {
     pub fov: f32,
     /// Un indicador para saber si el jugador se ha movido, útil para optimizar el renderizado.
     pub has_moved: bool,
+    /// Segundos restantes de invulnerabilidad tras recibir un golpe.
+    pub invulnerable: f32,
 }
 
 impl Player {
@@ -20,6 +22,7 @@ impl Player {
             direction: Vec2::new(1.0, 0.0), // Dirección inicial hacia la derecha.
             fov: std::f32::consts::PI / 3.0, // Campo de visión de 60 grados.
             has_moved: false,
+            invulnerable: 0.0,
         }
     }
 
@@ -75,6 +78,15 @@ impl Player {
             self.position.y + strafe_dir.y * distance,
         );
 
+        if self.is_valid_position(new_pos, map) {
+            self.position = new_pos;
+            self.has_moved = true;
+        }
+    }
+
+    /// Empuja al jugador un desplazamiento dado, si la posición resultante es válida.
+    pub fn push(&mut self, offset: Vec2, map: &[Vec<u8>]) {
+        let new_pos = Vec2::new(self.position.x + offset.x, self.position.y + offset.y);
         if self.is_valid_position(new_pos, map) {
             self.position = new_pos;
             self.has_moved = true;

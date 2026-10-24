@@ -7,15 +7,28 @@ pub struct Level {
     pub required_items: usize,
     /// El nombre del nivel, que se muestra en la interfaz de usuario.
     pub name: String,
+    /// Posiciones iniciales de los enemigos (centro de cada celda marcada con 4).
+    pub enemy_spawns: Vec<(f32, f32)>,
 }
 
 impl Level {
     /// Crea un nuevo nivel con un mapa, número de ítems requeridos y nombre.
-    pub fn new(map: Vec<Vec<u8>>, required_items: usize, name: &str) -> Self {
+    /// Las celdas con 4 marcan dónde aparecen los enemigos y se convierten en suelo.
+    pub fn new(mut map: Vec<Vec<u8>>, required_items: usize, name: &str) -> Self {
+        let mut enemy_spawns = Vec::new();
+        for (y, row) in map.iter_mut().enumerate() {
+            for (x, cell) in row.iter_mut().enumerate() {
+                if *cell == 4 {
+                    enemy_spawns.push((x as f32 + 0.5, y as f32 + 0.5));
+                    *cell = 0;
+                }
+            }
+        }
         Self {
             map,
             required_items,
             name: name.to_string(),
+            enemy_spawns,
         }
     }
 

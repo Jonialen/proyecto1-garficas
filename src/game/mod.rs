@@ -2,6 +2,7 @@
 
 // Declaración de los submódulos que componen el módulo de juego.
 pub mod camera;
+pub mod enemy;
 pub mod entity;
 pub mod player;
 pub mod state;
@@ -9,6 +10,7 @@ pub mod level;
 
 // Exporta las estructuras y enums más importantes para que sean accesibles desde otros módulos.
 pub use camera::*;
+pub use enemy::*;
 pub use entity::*;
 pub use player::*;
 pub use state::*;
