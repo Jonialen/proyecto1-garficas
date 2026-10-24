@@ -11,7 +11,9 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 - **Objetos en 3D**: Los ítems son diamantes que giran y flotan, y la meta es una esfera que pulsa; ambos con iluminación, sombra en el suelo y z-buffer.
 - **Efectos**: Destello dorado al recoger un ítem, balanceo de cámara al caminar y transiciones con fundido entre niveles.
 - **Minimapa**: Semitransparente, con desplazamiento suave centrado en el jugador.
-- **Doble Cámara**: Cambia entre una vista en primera persona y una vista cenital (top-down) para navegar por el laberinto.
+- **Enemigos**: Fantasmas que deambulan por el laberinto y te persiguen cuando te ven. Tienes 3 vidas por nivel; cada golpe te empuja y te da un momento de invulnerabilidad, y al perderlas todas el nivel se reinicia.
+- **Música y Sonido**: Música chiptune y efectos de sonido sintetizados en tiempo real, sin archivos de audio.
+- **Doble Cámara**: Cambia entre una vista en primera persona y una vista cenital (top-down) iluminada por la linterna del jugador, con sombras y línea de visión.
 - **Múltiples Niveles**: Incluye 3 niveles de dificultad creciente.
 - **Interfaz de Usuario en Terminal**: Menú, selección de nivel y pantalla de victoria con títulos animados en letras de bloque.
 - **Controles Intuitivos**: Movimiento y rotación estándar para una fácil navegación.
@@ -22,6 +24,7 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 
 - [Rust](https://www.rust-lang.org/tools/install)
 - Una terminal con soporte de color de 24 bits (truecolor), por ejemplo Ghostty, Kitty, Alacritty, WezTerm o Foot.
+- En Linux, la biblioteca de desarrollo de ALSA para compilar el audio (`alsa-lib` en Arch, `libasound2-dev` en Debian/Ubuntu, `alsa-lib-devel` en Fedora). Si no hay dispositivo de audio, el juego funciona en silencio.
 
 ### Compilación y Ejecución
 
@@ -41,6 +44,7 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 - **Movimiento**: `WASD` o las teclas de flecha (`↑` `↓` `←` `→`).
 - **Rotación de la Cámara**: `Q` y `E`.
 - **Cambiar Vista de Cámara**: `C` (entre primera persona y cenital).
+- **Silenciar Audio**: `M`.
 - **Salir del Juego**: `X` o `ESC`.
 
 ## Estructura del Proyecto
@@ -48,17 +52,19 @@ Un juego de laberintos en 3D renderizado en la terminal, construido con Rust. El
 El proyecto está organizado en los siguientes módulos principales dentro de `src/`:
 
 - **`main.rs`**: El punto de entrada de la aplicación. Contiene el bucle principal del juego, la gestión de estados y el manejo de eventos.
-- **`lib.rs`**: El punto de entrada de la biblioteca del juego, que exporta los módulos `game`, `graphics` y `math`.
+- **`lib.rs`**: El punto de entrada de la biblioteca del juego, que exporta los módulos `audio`, `game`, `graphics` y `math`.
 - **`game/`**: Contiene la lógica y las estructuras de datos del juego.
   - `player.rs`: Define al jugador, su movimiento y estado.
   - `level.rs`: Gestiona la estructura de los niveles, el mapa y los ítems.
   - `camera.rs`: Controla la cámara del juego y sus modos.
+  - `enemy.rs`: Define a los enemigos y su comportamiento (deambular, perseguir y buscar al jugador).
   - `state.rs`: Define los diferentes estados del juego (menú, jugando, etc.).
   - `entity.rs`: (Actualmente en desuso) Estructura para futuras entidades en el juego.
 - **`graphics/`**: Se encarga de todo el renderizado en la terminal.
   - `renderer.rs`: El motor de renderizado principal. Dibuja el mundo 3D (paredes, suelo, objetos y efectos), el mapa 2D, los menús y la UI.
   - `framebuffer.rs`: Abstracción de un búfer de píxeles para dibujar en la terminal.
   - `pixel.rs`: Representa un único carácter con color en la terminal.
+- **`audio/`**: Sintetiza la música y los efectos de sonido con `rodio`.
 - **`math/`**: Proporciona herramientas matemáticas básicas.
   - `mod.rs`: Incluye una estructura `Vec2` para operaciones vectoriales en 2D.
 

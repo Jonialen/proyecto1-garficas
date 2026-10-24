@@ -52,7 +52,12 @@ pub struct Audio {
 impl Audio {
     /// Abre el dispositivo de audio por defecto y empieza la música. Devuelve `None` si no hay audio.
     pub fn new() -> Option<Self> {
-        let mut device = DeviceSinkBuilder::open_default_sink().ok()?;
+        // Los errores del stream se ignoran: imprimirlos en stderr rompería el dibujado en la terminal.
+        // Si el dispositivo por defecto falla, se prueban las alternativas que ofrece rodio.
+        let mut device = DeviceSinkBuilder::from_default_device()
+            .and_then(|builder| builder.with_error_callback(|_| {}).open_stream())
+            .or_else(|_| DeviceSinkBuilder::open_default_sink())
+            .ok()?;
         device.log_on_drop(false);
 
         let music = Player::connect_new(device.mixer());
